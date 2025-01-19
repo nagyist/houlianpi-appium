@@ -1,15 +1,15 @@
 import _ from 'lodash';
-import ExtensionCommand from './extension-command';
+import ExtensionCliCommand from './extension-command';
 import {KNOWN_DRIVERS} from '../constants';
 import '@colors/colors';
 
 const REQ_DRIVER_FIELDS = ['driverName', 'automationName', 'platformNames', 'mainClass'];
 
 /**
- * @extends {ExtensionCommand<DriverType>}
+ * @extends {ExtensionCliCommand<DriverType>}
  */
 
-export default class DriverCommand extends ExtensionCommand {
+export default class DriverCliCommand extends ExtensionCliCommand {
   /**
    * @param {import('./extension-command').ExtensionCommandOptions<DriverType>} opts
    */
@@ -58,7 +58,25 @@ export default class DriverCommand extends ExtensionCommand {
    * @return {Promise<import('./extension-command').RunOutput>}
    */
   async run({driver, scriptName, extraArgs}) {
-    return await super._run({installSpec: driver, scriptName, extraArgs});
+    return await super._run({
+      installSpec: driver,
+      scriptName,
+      extraArgs,
+      bufferOutput: this.isJsonOutput,
+    });
+  }
+
+  /**
+   * Runs doctor checks for the given driver.
+   *
+   * @param {DriverDoctorOptions} opts
+   * @returns {Promise<number>} The amount of executed doctor checks.
+   * @throws {Error} If any of the mandatory Doctor checks fails.
+   */
+  async doctor({driver}) {
+    return await super._doctor({
+      installSpec: driver,
+    });
   }
 
   /**
@@ -115,7 +133,7 @@ export default class DriverCommand extends ExtensionCommand {
  */
 
 /**
- * Options for {@linkcode DriverCommand.install}
+ * Options for {@linkcode DriverCliCommand.install}
  * @typedef DriverInstallOpts
  * @property {string} driver - the name or spec of a driver to install
  * @property {InstallType} installType - how to install this driver. One of the INSTALL_TYPES
@@ -127,22 +145,28 @@ export default class DriverCommand extends ExtensionCommand {
  */
 
 /**
- * Options for {@linkcode DriverCommand.uninstall}
+ * Options for {@linkcode DriverCliCommand.uninstall}
  * @typedef DriverUninstallOpts
  * @property {string} driver - the name or spec of a driver to uninstall
  */
 
 /**
- * Options for {@linkcode DriverCommand.update}
+ * Options for {@linkcode DriverCliCommand.update}
  * @typedef DriverUpdateOpts
  * @property {string} driver - the name of the driver to update
  * @property {boolean} unsafe - if true, will perform unsafe updates past major revision boundaries
  */
 
 /**
- * Options for {@linkcode DriverCommand.run}.
+ * Options for {@linkcode DriverCliCommand.run}.
  * @typedef DriverRunOptions
  * @property {string} driver - name of the driver to run a script from
  * @property {string} scriptName - name of the script to run
  * @property {string[]} [extraArgs] - arguments to pass to the script
+ */
+
+/**
+ * Options for {@linkcode DriverCliCommand.doctor}.
+ * @typedef DriverDoctorOptions
+ * @property {string} driver - name of the driver to run doctor checks for
  */

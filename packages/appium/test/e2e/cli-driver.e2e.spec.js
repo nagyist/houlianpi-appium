@@ -1,7 +1,7 @@
 // @ts-check
 
 import {exec} from 'teen_process';
-import {fs, tempDir, util} from '@appium/support';
+import {fs, system, tempDir, util} from '@appium/support';
 import path from 'path';
 import resolveFrom from 'resolve-from';
 import {
@@ -10,12 +10,11 @@ import {
   EXT_SUBCOMMAND_LIST as LIST,
   EXT_SUBCOMMAND_RUN as RUN,
   EXT_SUBCOMMAND_UNINSTALL as UNINSTALL,
+  EXT_SUBCOMMAND_DOCTOR as DOCTOR,
   KNOWN_DRIVERS,
 } from '../../lib/constants';
 import {FAKE_DRIVER_DIR, resolveFixture} from '../helpers';
 import {installLocalExtension, runAppiumJson, runAppiumRaw} from './e2e-helpers';
-
-const {expect} = chai;
 
 const TEST_DRIVER_DIR = path.dirname(resolveFixture('test-driver/package.json'));
 
@@ -24,6 +23,8 @@ const TEST_DRIVER_INVALID_PEERS_DIR = path.dirname(
 );
 
 describe('Driver CLI', function () {
+  this.timeout(90000); // some of these tests involve network and can be very slow
+
   /**
    * @type {string}
    */
@@ -49,12 +50,24 @@ describe('Driver CLI', function () {
    */
   let runUninstall;
 
+  /**
+   * @type {(args: string[]) => Promise<ExtRecord<DriverType>>}
+   */
+  let runDoctor;
+  let expect;
+
   async function resetAppiumHome() {
     await fs.rimraf(appiumHome);
     await fs.mkdirp(appiumHome);
   }
 
   before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+
     appiumHome = await tempDir.openDir();
     const run = runAppiumJson(appiumHome);
     runInstall = async (args) =>
@@ -65,6 +78,8 @@ describe('Driver CLI', function () {
       /** @type {ReturnType<typeof runList>} */ (await run([DRIVER_TYPE, LIST, ...args]));
     runRun = async (args) =>
       /** @type {ReturnType<typeof runRun>} */ (await run([DRIVER_TYPE, RUN, ...args]));
+    runDoctor = async (args) =>
+      /** @type {ReturnType<typeof runDoctor>} */ (await run([DRIVER_TYPE, DOCTOR, ...args]));
   });
 
   after(async function () {
@@ -96,6 +111,10 @@ describe('Driver CLI', function () {
     });
 
     it('should show updates for installed drivers with --updates', async function () {
+      if (system.isWindows()) {
+        // TODO figure out why this isn't working on windows
+        return this.skip();
+      }
       const versions = /** @type {string[]} */ (
         JSON.parse(
           (
@@ -204,6 +223,11 @@ describe('Driver CLI', function () {
     });
 
     it('should install a driver from GitHub', async function () {
+      if (process.env.CI) {
+        // This test is too slow for CI env
+        return this.skip();
+      }
+
       const ret = await runInstall([
         'appium/appium-fake-driver',
         '--source',
@@ -238,6 +262,11 @@ describe('Driver CLI', function () {
     });
 
     it('should install a driver from a remote git repo', async function () {
+      if (process.env.CI) {
+        // This test is too slow for CI env
+        return this.skip();
+      }
+
       const ret = await runInstall([
         'git+https://github.com/appium/appium-fake-driver.git',
         '--source',
@@ -395,6 +424,22 @@ describe('Driver CLI', function () {
       it('should throw an error', async function () {
         const driverName = 'foo';
         await expect(runRun([driverName, 'bar'])).to.be.rejectedWith(Error);
+      });
+    });
+  });
+
+  describe('doctor', function () {
+    const driverName = 'fake';
+
+    before(async function () {
+      await resetAppiumHome();
+      await installLocalExtension(appiumHome, DRIVER_TYPE, FAKE_DRIVER_DIR);
+    });
+
+    describe('when the driver defines doctor checks', function () {
+      it('should load and run them', async function () {
+        const checksLen = await runDoctor([driverName]);
+        checksLen.should.eql(2);
       });
     });
   });

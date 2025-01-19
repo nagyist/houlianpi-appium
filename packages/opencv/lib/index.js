@@ -1,7 +1,8 @@
 import _ from 'lodash';
-import Jimp from 'jimp';
 import {Buffer} from 'buffer';
 import B from 'bluebird';
+import sharp from 'sharp';
+import { OpenCvAutoreleasePool } from './autorelease-pool';
 
 /** @type {any} */
 let cv;
@@ -104,6 +105,7 @@ async function initOpenCv() {
  * for brute-force matching.
  * Read https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_feature2d/py_matcher/py_matcher.html
  * for more details.
+ * The caller is responsible for releasing the returned objects.
  *
  * @param {OpenCVBindings['Mat']} img Image data
  * @param {OpenCVBindings['FeatureDetector']} detector OpenCV feature detector instance
@@ -124,7 +126,7 @@ function detectAndCompute(img, detector) {
 /**
  * Calculated the bounding rect coordinates for the array of matching points
  *
- * @param {Array<Point>} matchedPoints Array of matching points
+ * @param {Point[]} matchedPoints Array of matching points
  * @returns {Rect} The matching bounding rect or a zero rect if no match
  * can be found.
  */
@@ -140,10 +142,11 @@ function calculateMatchedRect(matchedPoints) {
 
   const pointsSortedByDistance = matchedPoints
     .map((point) => [Math.sqrt(point.x * point.x + point.y * point.y), point])
+    // @ts-ignore TS does not understand this, maybe its bug
     .sort((pair1, pair2) => pair1[0] >= pair2[0])
-    .map((pair) => pair[1]);
-  const firstPoint = _.head(pointsSortedByDistance);
-  const lastPoint = _.last(pointsSortedByDistance);
+    .map((/** @type {[number, Point]} */ pair) => pair[1]);
+  const firstPoint = /** @type {Point} */ (_.head(pointsSortedByDistance));
+  const lastPoint = /** @type {Point} */ (_.last(pointsSortedByDistance));
   const topLeftPoint = {
     x: firstPoint.x <= lastPoint.x ? firstPoint.x : lastPoint.x,
     y: firstPoint.y <= lastPoint.y ? firstPoint.y : lastPoint.y,
@@ -163,38 +166,43 @@ function calculateMatchedRect(matchedPoints) {
 /**
  * Draws a rectanngle on the given image matrix
  *
- * @param {cv.Mat} mat The source image
+ * @param {OpenCVBindings['Mat']} mat The source image
  * @param {Rect} region The region to highlight
  *
- * @returns {cv.Mat} The same image with the rectangle on it
+ * @returns {OpenCVBindings['Mat']} The same image with the rectangle on it
  */
 function highlightRegion(mat, region) {
   if (region.width <= 0 || region.height <= 0) {
     return;
   }
 
-  // highlight in red
-  const color = new cv.Scalar(255, 0, 0, 255);
-  const thickness = 2;
-  const topLeft = new cv.Point(region.x, region.y);
-  const botRight = new cv.Point(region.x + region.width, region.y + region.height);
-  cv.rectangle(mat, topLeft, botRight, color, thickness, cv.LINE_8, 0);
-  return mat;
+  const pool = new OpenCvAutoreleasePool();
+  try {
+    // highlight in red
+    const color = pool.add(new cv.Scalar(255, 0, 0, 255));
+    const thickness = 2;
+    const topLeft = pool.add(new cv.Point(region.x, region.y));
+    const botRight = pool.add(new cv.Point(region.x + region.width, region.y + region.height));
+    cv.rectangle(mat, topLeft, botRight, color, thickness, cv.LINE_8, 0);
+    return mat;
+  } finally {
+    pool.drain();
+  }
 }
 
 /**
  * @typedef MatchingOptions
- * @property {?string} detectorName ['ORB'] One of possible OpenCV feature detector names
+ * @property {string} [detectorName='ORB'] One of possible OpenCV feature detector names
  * from keys of the `AVAILABLE_DETECTORS` object.
  * Some of these methods (FAST, AGAST, GFTT, FAST, SIFT and MSER) are not available
  * in the default OpenCV installation and have to be enabled manually before
  * library compilation.
- * @property {?string} matchFunc ['BruteForce'] The name of the matching function.
+ * @property {string} [matchFunc='BruteForce'] The name of the matching function.
  * Should be one of the keys of the `AVAILABLE_MATCHING_FUNCTIONS` object.
- * @property {?number|Function} goodMatchesFactor The maximum count of "good" matches
+ * @property {number|Function?} [goodMatchesFactor] The maximum count of "good" matches
  * (e. g. with minimal distances) or a function, which accepts 3 arguments: the current distance,
  * minimal distance, maximum distance and returns true or false to include or exclude the match.
- * @property {?boolean} visualize [false] Whether to return the resulting visalization
+ * @property {boolean} [visualize=false] Whether to return the resulting visalization
  * as an image (useful for debugging purposes)
  */
 
@@ -206,13 +214,13 @@ function highlightRegion(mat, region) {
  * It is equal to `count` if `goodMatchesFactor` does not limit the matches,
  * otherwise it contains the total count of matches before `goodMatchesFactor` is
  * applied.
- * @property {?Buffer} visualization The visualization of the matching result
+ * @property {Buffer?} [visualization] The visualization of the matching result
  * represented as PNG image buffer. This visualization looks like
  * https://user-images.githubusercontent.com/31125521/29702731-c79e3142-8972-11e7-947e-db109d415469.jpg
- * @property {Array<Point>} points1 The array of matching points on the first image
+ * @property {Point[]} points1 The array of matching points on the first image
  * @property {Rect} rect1 The bounding rect for the `matchedPoints1` set or a zero rect
  * if not enough matching points are found
- * @property {Array<Point>} points2 The array of matching points on the second image
+ * @property {Point[]} points2 The array of matching points on the second image
  * @property {Rect} rect2 The bounding rect for the `matchedPoints2` set or a zero rect
  * if not enough matching points are found
  */
@@ -223,15 +231,15 @@ function highlightRegion(mat, region) {
  *
  * @param {Buffer} img1Data The data of the first image packed into a NodeJS buffer
  * @param {Buffer} img2Data The data of the second image packed into a NodeJS buffer
- * @param {?MatchingOptions} options [{}] Set of matching options
+ * @param {MatchingOptions} [options={}] Set of matching options
  *
- * @returns {MatchingResult} Maching result
+ * @returns {Promise<MatchingResult>} Maching result
  * @throws {Error} If `detectorName` value is unknown.
  */
 async function getImagesMatches(img1Data, img2Data, options = {}) {
   await initOpenCv();
 
-  let img1, img2, detector, result1, result2, matcher, matchesVec;
+  const pool = new OpenCvAutoreleasePool();
   try {
     const {
       detectorName = 'ORB',
@@ -254,13 +262,15 @@ async function getImagesMatches(img1Data, img2Data, options = {}) {
       );
     }
 
-    detector = new cv[AVAILABLE_DETECTORS[detectorName]]();
-    [img1, img2] = await B.all([cvMatFromImage(img1Data), cvMatFromImage(img2Data)]);
-    result1 = detectAndCompute(img1, detector);
-    result2 = detectAndCompute(img2, detector);
-    matcher = new cv.DescriptorMatcher(AVAILABLE_MATCHING_FUNCTIONS[matchFunc]);
-    matchesVec = new cv.DMatchVector();
-    let matches = [];
+    const detector = pool.add(new cv[AVAILABLE_DETECTORS[detectorName]]());
+    const [img1, img2] = (await B.all([cvMatFromImage(img1Data), cvMatFromImage(img2Data)]))
+      .map((x) => pool.add(x));
+    const result1 = detectAndCompute(img1, detector);
+    pool.add(result1.keyPoints, result1.descriptor);
+    const result2 = detectAndCompute(img2, detector);
+    pool.add(result2.keyPoints, result2.descriptor);
+    const matcher = pool.add(new cv.DescriptorMatcher(AVAILABLE_MATCHING_FUNCTIONS[matchFunc]));
+    const matchesVec = pool.add(new cv.DMatchVector());
     matcher.match(result1.descriptor, result2.descriptor, matchesVec);
     const totalCount = matchesVec.size();
     if (totalCount < 1) {
@@ -269,6 +279,7 @@ async function getImagesMatches(img1Data, img2Data, options = {}) {
           `resolution, or use another detector or matching function.`
       );
     }
+    let matches = [];
     for (let i = 0; i < totalCount; i++) {
       matches.push(matchesVec.get(i));
     }
@@ -313,12 +324,12 @@ async function getImagesMatches(img1Data, img2Data, options = {}) {
       count: matches.length,
     };
     if (visualize) {
-      const goodMatchesVec = new cv.DMatchVector();
+      const goodMatchesVec = pool.add(new cv.DMatchVector());
       for (let i = 0; i < matches.length; i++) {
         goodMatchesVec.push_back(matches[i]);
       }
-      const visualization = new cv.Mat();
-      const color = new cv.Scalar(0, 255, 0, 255);
+      const visualization = pool.add(new cv.Mat());
+      const color = pool.add(new cv.Scalar(0, 255, 0, 255));
       cv.drawMatches(
         img1,
         result1.keyPoints,
@@ -335,37 +346,27 @@ async function getImagesMatches(img1Data, img2Data, options = {}) {
         width: rect2.width,
         height: rect2.height,
       });
-      result.visualization = await jimpImgFromCvMat(visualization).getBufferAsync(Jimp.MIME_PNG);
+      result.visualization = await cvMatToPng(visualization);
     }
 
     return result;
   } finally {
-    try {
-      img1.delete();
-      img2.delete();
-      detector.delete();
-      result1.keyPoints.delete();
-      result1.descriptor.delete();
-      result2.keyPoints.delete();
-      result2.descriptor.delete();
-      matcher.delete();
-      matchesVec.delete();
-    } catch (ign) {}
+    pool.drain();
   }
 }
 
 /**
  * @typedef SimilarityOptions
- * @property {?boolean} visualize [false] Whether to return the resulting visalization
+ * @property {boolean} [visualize=false] Whether to return the resulting visalization
  * as an image (useful for debugging purposes)
- * @property {string} method [TM_CCOEFF_NORMED] The name of the template matching method.
+ * @property {string} [method='TM_CCOEFF_NORMED'] The name of the template matching method.
  * Acceptable values are:
- * - TM_CCOEFF
- * - TM_CCOEFF_NORMED (default)
- * - TM_CCORR
- * - TM_CCORR_NORMED
- * - TM_SQDIFF
- * - TM_SQDIFF_NORMED
+ * - `TM_CCOEFF`
+ * - `TM_CCOEFF_NORMED` (default)
+ * - `TM_CCORR`
+ * - `TM_CCORR_NORMED`
+ * - `TM_SQDIFF`
+ * - `TM_SQDIFF_NORMED`
  * Read https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_template_matching/py_template_matching.html
  * for more details.
  */
@@ -374,7 +375,7 @@ async function getImagesMatches(img1Data, img2Data, options = {}) {
  * @typedef SimilarityResult
  * @property {number} score The similarity score as a float number in range [0.0, 1.0].
  * 1.0 is the highest score (means both images are totally equal).
- * @property {?Buffer} visualization The visualization of the matching result
+ * @property {Buffer?} [visualization] The visualization of the matching result
  * represented as PNG image buffer. This image includes both input pictures where
  * difference regions are highlighted with rectangles.
  */
@@ -385,9 +386,9 @@ async function getImagesMatches(img1Data, img2Data, options = {}) {
  *
  * @param {Buffer} img1Data The data of the first image packed into a NodeJS buffer
  * @param {Buffer} img2Data The data of the second image packed into a NodeJS buffer
- * @param {?SimilarityOptions} options [{}] Set of similarity calculation options
+ * @param {SimilarityOptions} [options={}] Set of similarity calculation options
  *
- * @returns {SimilarityResult} The calculation result
+ * @returns {Promise<SimilarityResult>} The calculation result
  * @throws {Error} If the given images have different resolution.
  */
 async function getImagesSimilarity(img1Data, img2Data, options = {}) {
@@ -395,9 +396,10 @@ async function getImagesSimilarity(img1Data, img2Data, options = {}) {
 
   const {method = DEFAULT_MATCHING_METHOD, visualize = false} = options;
 
-  let template, reference, matched;
+  const pool = new OpenCvAutoreleasePool();
   try {
-    [template, reference] = await B.all([cvMatFromImage(img1Data), cvMatFromImage(img2Data)]);
+    const [template, reference] = (await B.all([cvMatFromImage(img1Data), cvMatFromImage(img2Data)]))
+      .map((x) => pool.add(x));
     if (template.rows !== reference.rows || template.cols !== reference.cols) {
       throw new Error(
         'Both images are expected to have the same size in order to ' +
@@ -407,7 +409,7 @@ async function getImagesSimilarity(img1Data, img2Data, options = {}) {
     template.convertTo(template, cv.CV_8UC3);
     reference.convertTo(reference, cv.CV_8UC3);
 
-    matched = new cv.Mat();
+    const matched = pool.add(new cv.Mat());
     cv.matchTemplate(reference, template, matched, toMatchingMethod(method));
     const minMax = cv.minMaxLoc(matched);
     const result = {
@@ -415,51 +417,36 @@ async function getImagesSimilarity(img1Data, img2Data, options = {}) {
     };
 
     if (visualize) {
-      let bothImages, resultMat, mask, contours, hierarchy;
-      try {
-        resultMat = new cv.Mat(template.rows, template.cols * 2, cv.CV_8UC3);
-        bothImages = new cv.MatVector();
-        bothImages.push_back(reference);
-        bothImages.push_back(template);
-        cv.hconcat(bothImages, resultMat);
+      const resultMat = pool.add(new cv.Mat(template.rows, template.cols * 2, cv.CV_8UC3));
+      const bothImages = pool.add(new cv.MatVector());
+      bothImages.push_back(reference);
+      bothImages.push_back(template);
+      cv.hconcat(bothImages, resultMat);
 
-        mask = new cv.Mat();
-        cv.absdiff(reference, template, mask);
-        cv.cvtColor(mask, mask, cv.COLOR_BGR2GRAY, 0);
+      const mask = pool.add(new cv.Mat());
+      cv.absdiff(reference, template, mask);
+      cv.cvtColor(mask, mask, cv.COLOR_BGR2GRAY, 0);
 
-        cv.threshold(mask, mask, 128, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-        contours = new cv.MatVector();
-        hierarchy = new cv.Mat();
-        cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      cv.threshold(mask, mask, 128, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+      const contours = pool.add(new cv.MatVector());
+      const hierarchy = pool.add(new cv.Mat());
+      cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-        for (let i = 0; i < contours.size(); i++) {
-          const boundingRect = cv.boundingRect(contours.get(i));
-          highlightRegion(resultMat, boundingRect);
-          highlightRegion(resultMat, {
-            x: reference.cols + boundingRect.x,
-            y: boundingRect.y,
-            width: boundingRect.width,
-            height: boundingRect.height,
-          });
-        }
-        result.visualization = await jimpImgFromCvMat(resultMat).getBufferAsync(Jimp.MIME_PNG);
-      } finally {
-        try {
-          bothImages.delete();
-          resultMat.delete();
-          mask.delete();
-          contours.delete();
-          hierarchy.delete();
-        } catch (ign) {}
+      for (let i = 0; i < contours.size(); i++) {
+        const boundingRect = pool.add(cv.boundingRect(contours.get(i)));
+        highlightRegion(resultMat, boundingRect);
+        highlightRegion(resultMat, {
+          x: reference.cols + boundingRect.x,
+          y: boundingRect.y,
+          width: boundingRect.width,
+          height: boundingRect.height,
+        });
       }
+      result.visualization = await cvMatToPng(resultMat);
     }
     return result;
   } finally {
-    try {
-      template.delete();
-      reference.delete();
-      matched.delete();
-    } catch (ign) {}
+    pool.drain();
   }
 }
 
@@ -472,32 +459,29 @@ async function getImagesSimilarity(img1Data, img2Data, options = {}) {
  * @property {number|boolean} [multiple=false] find multiple matches in the image
  * @property {number} [matchNeighbourThreshold=10] The pixel distance between matches we consider
  * to be part of the same template match
- */
-
-/**
- * @typedef {'TM_CCOEFF'|'TM_CCOEFF_NORMED|'TM_CCORR'|'TM_CCORR_NORMED'|'TM_SQDIFF'|'TMSQDIFF_NORMED'} OccurrenceResultMethod
+ * @property {TemplateMatchingMethod} [method='TM_CCOEFF_NORMED']
  */
 
 /**
  * @typedef OccurrenceResult
  * @property {import('@appium/types').Rect} rect The region of the partial image occurence
  * on the full image
- * @property {Buffer} visualization The visualization of the matching result
+ * @property {Buffer?} [visualization] The visualization of the matching result
  * represented as PNG image buffer. On this image the matching
  * region is highlighted with a rectangle. If the multiple option is passed,
  * all results are highlighted here.
  * @property {number} score The similarity score as a float number in range [0.0, 1.0].
  * 1.0 is the highest score (means both images are totally equal).
- * @property {OccurrenceResult[]} multiple The array of matching OccurenceResults
+ * @property {OccurrenceResult[]} [multiple] The array of matching OccurenceResults
  * - only when multiple option is passed
- * @property {OccurrenceResultMethod} [method='TM_CCOEFF_NORMED'] The name of the template matching method.
+ * @property {TemplateMatchingMethod} [method='TM_CCOEFF_NORMED'] The name of the template matching method.
  * Acceptable values are:
- * - TM_CCOEFF
- * - TM_CCOEFF_NORMED (default)
- * - TM_CCORR
- * - TM_CCORR_NORMED
- * - TM_SQDIFF
- * - TM_SQDIFF_NORMED
+ * - `TM_CCOEFF`
+ * - `TM_CCOEFF_NORMED` (default)
+ * - `TM_CCORR`
+ * - `TM_CCORR_NORMED`
+ * - `TM_SQDIFF`
+ * - `TM_SQDIFF_NORMED`
  * Read https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_imgproc/py_template_matching/py_template_matching.html
  * for more details.
  */
@@ -508,9 +492,9 @@ async function getImagesSimilarity(img1Data, img2Data, options = {}) {
  *
  * @param {Buffer} fullImgData The data of the full image packed into a NodeJS buffer
  * @param {Buffer} partialImgData The data of the partial image packed into a NodeJS buffer
- * @param {OccurrenceOptions?} [options] Set of occurrence calculation options
+ * @param {OccurrenceOptions} [options] Set of occurrence calculation options
  *
- * @returns {OccurrenceResult}
+ * @returns {Promise<OccurrenceResult>}
  * @throws {Error} If no occurrences of the partial image can be found in the full image
  */
 async function getImageOccurrence(fullImgData, partialImgData, options = {}) {
@@ -524,14 +508,11 @@ async function getImageOccurrence(fullImgData, partialImgData, options = {}) {
     method = DEFAULT_MATCHING_METHOD,
   } = options;
 
-  let fullImg, partialImg, matched;
-
+  const pool = new OpenCvAutoreleasePool();
   try {
-    [fullImg, partialImg] = await B.all([
-      cvMatFromImage(fullImgData),
-      cvMatFromImage(partialImgData),
-    ]);
-    matched = new cv.Mat();
+    const [fullImg, partialImg] = await B.all([cvMatFromImage(fullImgData), cvMatFromImage(partialImgData)])
+      .map((x) => pool.add(x));
+    const matched = pool.add(new cv.Mat());
     const results = [];
     let visualization = null;
 
@@ -579,7 +560,7 @@ async function getImageOccurrence(fullImgData, partialImgData, options = {}) {
       if (_.isEmpty(results)) {
         // Below error message, `Cannot find any occurrences` is referenced in find by image
         throw new Error(
-          `Match threshold: ${threshold}. Highest match value ` + `found was ${minMax.maxVal}`
+          `Match threshold: ${threshold}. Highest match value found was ${minMax.maxVal}`
         );
       }
     } catch (e) {
@@ -591,18 +572,24 @@ async function getImageOccurrence(fullImgData, partialImgData, options = {}) {
     }
 
     if (visualize) {
-      const fullHighlightedImage = fullImg.clone();
+      const fullHighlightedImage = pool.add(fullImg.clone());
 
+      const visualisePromises = [];
       for (const result of results) {
-        const singleHighlightedImage = fullImg.clone();
+        const singleHighlightedImage = pool.add(fullImg.clone());
 
         highlightRegion(singleHighlightedImage, result.rect);
         highlightRegion(fullHighlightedImage, result.rect);
-        result.visualization = await jimpImgFromCvMat(singleHighlightedImage).getBufferAsync(
-          Jimp.MIME_PNG
-        );
+        visualisePromises.push(cvMatToPng(singleHighlightedImage));
       }
-      visualization = await jimpImgFromCvMat(fullHighlightedImage).getBufferAsync(Jimp.MIME_PNG);
+      let restPngBuffers = [];
+      [visualization, ...restPngBuffers] = await B.all(
+        [cvMatToPng(fullHighlightedImage), ...visualisePromises]
+      );
+      for (const [result, pngBuffer] of _.zip(results, restPngBuffers)) {
+        // @ts-ignore This is fine
+        result.visualization = pngBuffer;
+      }
     }
     return {
       rect: results[0].rect,
@@ -611,50 +598,63 @@ async function getImageOccurrence(fullImgData, partialImgData, options = {}) {
       multiple: results,
     };
   } finally {
-    try {
-      fullImg.delete();
-      partialImg.delete();
-      matched.delete();
-    } catch (ign) {}
+    pool.drain();
   }
 }
 
 /**
- * Convert an opencv image matrix into a Jimp image object
+ * Convert an opencv image matrix into a PNG buffer
  *
- * @param {cv.Mat} mat the image matrix
- * @return {Jimp} the Jimp image
+ * @param {OpenCVBindings['Mat']} mat OpenCV image matrix
+ * @return {Promise<Buffer>} PNG image data buffer
  */
-function jimpImgFromCvMat(mat) {
-  return new Jimp({
-    width: mat.cols,
-    height: mat.rows,
-    data: Buffer.from(mat.data),
-  });
+async function cvMatToPng(mat) {
+  return await sharp(Buffer.from(mat.data), {
+    raw: {
+      width: mat.cols,
+      height: mat.rows,
+      channels: 4,
+    }
+  })
+  .png()
+  .toBuffer();
 }
 
 /**
- * Take a binary image buffer and return a cv.Mat
+ * Take an image buffer and return a cv.Mat
  *
- * @param {Buffer} img the image data buffer
- * @return {cv.Mat} the opencv matrix
+ * @param {Buffer} img image data buffer. All image formats avilable for
+ * https://www.npmjs.com/package/sharp node library are supported.
+ * @return {Promise<OpenCVBindings['Mat']>} OpenCV image matrix
  */
 async function cvMatFromImage(img) {
-  const jimpImg = await Jimp.read(img);
-  return cv.matFromImageData(jimpImg.bitmap);
+  const {data, info} = await sharp(img)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({resolveWithObject: true});
+  const {width, height} = info;
+  return cv.matFromImageData({data, width, height});
 }
+
+/**
+ * @typedef {Object} Match
+ * @property {number} score
+ * @property {number} x
+ * @property {number} y
+ */
 
 /**
  * Filter out match results which have a matched neighbour
  *
- * @param {Array<Point>} nonZeroMatchResults matrix of image match results
+ * @param {Match[]} nonZeroMatchResults matrix of image match results
  * @param {number} matchNeighbourThreshold The pixel distance within which we
  * consider an element being a neighbour of an existing match
- * @return {Array<Point>} the filtered array of matched points
+ * @returns {Match[]} the filtered array of matched points
  */
 function filterNearMatches(nonZeroMatchResults, matchNeighbourThreshold) {
   return nonZeroMatchResults.reduce((acc, element) => {
     if (!acc.some((match) => distance(match, element) <= matchNeighbourThreshold)) {
+      // @ts-ignore TS cannot properly undertstand types here
       acc.push(element);
     }
     return acc;
@@ -681,4 +681,8 @@ export {getImagesMatches, getImagesSimilarity, getImageOccurrence, initOpenCv};
  * @property {any} Mat
  * @property {any} KeyPointVector
  * @property {any} FeatureDetector
+ */
+
+/**
+ * @typedef {'TM_CCOEFF'|'TM_CCOEFF_NORMED'|'TM_CCORR'|'TM_CCORR_NORMED'|'TM_SQDIFF'|'TMSQDIFF_NORMED'} TemplateMatchingMethod
  */

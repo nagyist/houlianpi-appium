@@ -1,22 +1,22 @@
-import type {EventEmitter} from 'events';
-import {Element, ActionSequence} from './action';
-import {
-  HTTPMethod,
-  AppiumServer,
-  UpdateServerCallback,
-  Class,
-  MethodMap,
-  AppiumLogger,
-  StringRecord,
-  ConstraintsToCaps,
-  BaseDriverCapConstraints,
-  W3CCapabilities,
-  Capabilities,
-  ExecuteMethodMap,
-} from '.';
-import {ServerArgs} from './config';
-import {AsyncReturnType, Entries} from 'type-fest';
+import type {EventEmitter} from 'node:events';
+import type {Merge} from 'type-fest';
+import type {ActionSequence} from './action';
+import type {Capabilities, DriverCaps, W3CCapabilities, W3CDriverCaps} from './capabilities';
+import type {BidiModuleMap, BiDiResultData, ExecuteMethodMap, MethodMap} from './command';
+import type {ServerArgs} from './config';
+import type {HTTPHeaders, HTTPMethod} from './http';
+import type {AppiumLogger} from './logger';
+import type {AppiumServer, UpdateServerCallback} from './server';
+import type {Class, Element, StringRecord} from './util';
+import type internal from 'node:stream';
 
+/**
+ * Interface implemented by the `DeviceSettings` class in `@appium/base-driver`
+ */
+export interface IDeviceSettings<T extends StringRecord> {
+  update(newSettings: T): Promise<void>;
+  getSettings(): T;
+}
 export interface ITimeoutCommands {
   /**
    * Set the various timeouts associated with a session
@@ -33,7 +33,7 @@ export interface ITimeoutCommands {
     ms: number | string,
     script?: number,
     pageLoad?: number,
-    implicit?: number | string
+    implicit?: number | string,
   ): Promise<void>;
 
   /**
@@ -49,6 +49,7 @@ export interface ITimeoutCommands {
    * @param ms - the timeout in ms
    *
    * @deprecated Use `timeouts` instead
+   *
    */
   implicitWait(ms: number | string): Promise<void>;
 
@@ -66,7 +67,7 @@ export interface ITimeoutCommands {
    *
    * @returns The return value of the condition
    */
-  implicitWaitForCondition(condition: () => Promise<any>): Promise<unknown>;
+  implicitWaitForCondition(condition: (...args: any[]) => Promise<any>): Promise<unknown>;
 
   /**
    * Get the current timeouts
@@ -157,22 +158,6 @@ export interface IEventCommands {
   getLogEvents(type?: string | string[]): Promise<EventHistory | Record<string, number>>;
 }
 
-export interface ISessionCommands {
-  /**
-   * Get data for all sessions running on an Appium server
-   *
-   * @returns A list of session data objects
-   */
-  getSessions(): Promise<MultiSessionData[]>;
-
-  /**
-   * Get the data for the current session
-   *
-   * @returns A session data object
-   */
-  getSession(): Promise<SingularSessionData>;
-}
-
 export interface IExecuteCommands {
   /**
    * Call an `Execute Method` by its name with the given arguments. This method will check that the
@@ -183,23 +168,36 @@ export interface IExecuteCommands {
    *
    * @returns The result of calling the Execute Method
    */
-  executeMethod(script: string, args: [StringRecord] | []): Promise<any>;
+  executeMethod<
+    TArgs extends readonly any[] | readonly [StringRecord<unknown>] = unknown[],
+    TReturn = unknown,
+  >(
+    script: string,
+    args: TArgs,
+  ): Promise<TReturn>;
 }
 
-export interface MultiSessionData<
-  C extends Constraints = BaseDriverCapConstraints,
-  Extra extends StringRecord | void = void
-> {
+export interface MultiSessionData<C extends Constraints = Constraints> {
   id: string;
-  capabilities: Capabilities<C, Extra>;
+  capabilities: DriverCaps<C>;
 }
 
+/**
+ * Data returned by {@linkcode ISessionCommands.getSession}.
+ *
+ * @typeParam C - The driver's constraints
+ * @typeParam T - Any extra data the driver stuffs in here
+ * @privateRemarks The content of this object looks implementation-specific and in practice is not well-defined.  It's _possible_ to fully type this in the future.
+ */
 export type SingularSessionData<
-  C extends Constraints = BaseDriverCapConstraints,
-  Extra extends StringRecord | void = void
-> = Capabilities<C, Extra> & {events?: EventHistory; error?: string};
+  C extends Constraints = Constraints,
+  T extends StringRecord = StringRecord,
+> = DriverCaps<C> & {
+  events?: EventHistory;
+  error?: string;
+} & T;
 
-export interface IFindCommands<Ctx = any> {
+export interface IFindCommands {
   /**
    * Find a UI element given a locator strategy and a selector, erroring if it can't be found
    * @see {@link https://w3c.github.io/webdriver/#find-element}
@@ -251,7 +249,7 @@ export interface IFindCommands<Ctx = any> {
   findElementsFromElement(
     strategy: string,
     selector: string,
-    elementId: string
+    elementId: string,
   ): Promise<Element[]>;
 
   /**
@@ -266,7 +264,7 @@ export interface IFindCommands<Ctx = any> {
   findElementFromShadowRoot?(
     strategy: string,
     selector: string,
-    shadowId: string
+    shadowId: string,
   ): Promise<Element>;
 
   /**
@@ -281,7 +279,7 @@ export interface IFindCommands<Ctx = any> {
   findElementsFromShadowRoot?(
     strategy: string,
     selector: string,
-    shadowId: string
+    shadowId: string,
   ): Promise<Element[]>;
 
   /**
@@ -294,15 +292,11 @@ export interface IFindCommands<Ctx = any> {
    *
    * @returns A single element or list of elements
    */
-  findElOrEls<Mult extends boolean>(
-    strategy: string,
-    selector: string,
-    mult: Mult,
-    context?: Ctx
-  ): Promise<Mult extends true ? Element[] : Element>;
+  findElOrEls(strategy: string, selector: string, mult: true, context?: any): Promise<Element[]>;
+  findElOrEls(strategy: string, selector: string, mult: false, context?: any): Promise<Element>;
 
   /**
-   * This is a wrapper for {@linkcode IFindCommands.findElOrEls} that validates locator strategies
+   * This is a wrapper for {@linkcode findElOrEls} that validates locator strategies
    * and implements the `appium:printPageSourceOnFindFailure` capability
    *
    * @param strategy - the locator strategy
@@ -312,12 +306,18 @@ export interface IFindCommands<Ctx = any> {
    *
    * @returns A single element or list of elements
    */
-  findElOrElsWithProcessing<Mult extends boolean>(
+  findElOrElsWithProcessing(
     strategy: string,
     selector: string,
-    mult: Mult,
-    context?: Ctx
-  ): Promise<Mult extends true ? Element[] : Element>;
+    mult: true,
+    context?: any,
+  ): Promise<Element[]>;
+  findElOrElsWithProcessing(
+    strategy: string,
+    selector: string,
+    mult: false,
+    context?: any,
+  ): Promise<Element>;
 
   /**
    * Get the current page/app source as HTML/XML
@@ -328,41 +328,41 @@ export interface IFindCommands<Ctx = any> {
   getPageSource(): Promise<string>;
 }
 
-export interface ILogCommands<C extends Constraints> {
+export interface ILogCommands {
   /**
    * Definition of the available log types
    */
-  supportedLogTypes: Readonly<LogDefRecord<C>>;
+  supportedLogTypes: Readonly<LogDefRecord>;
 
   /**
    * Get available log types as a list of strings
    */
-  getLogTypes(): Promise<(keyof ILogCommands<C>['supportedLogTypes'])[]>;
+  getLogTypes(): Promise<string[]>;
 
   /**
    * Get the log for a given log type.
    *
    * @param logType - Name/key of log type as defined in {@linkcode ILogCommands.supportedLogTypes}.
    */
-  getLog(
-    logType: keyof ILogCommands<C>['supportedLogTypes']
-  ): Promise<
-    AsyncReturnType<
-      ILogCommands<C>['supportedLogTypes'][keyof ILogCommands<C>['supportedLogTypes']]['getter']
-    >
-  >;
+  getLog(logType: string): Promise<any>;
+}
+
+export interface IBidiCommands {
+  bidiSubscribe(events: string[], contexts: string[]): Promise<void>;
+  bidiUnsubscribe(events: string[], contexts: string[]): Promise<void>;
+  bidiStatus(): Promise<DriverStatus>;
 }
 
 /**
  * A record of {@linkcode LogDef} objects, keyed by the log type name.
  * Used in {@linkcode ILogCommands.supportedLogTypes}
  */
-export type LogDefRecord<C extends Constraints> = Record<string, LogDef<C>>;
+export type LogDefRecord = Record<string, LogDef>;
 
 /**
  * A definition of a log type
  */
-export interface LogDef<C extends Constraints, T = unknown> {
+export interface LogDef {
   /**
    * Description of the log type.
    *
@@ -375,31 +375,47 @@ export interface LogDef<C extends Constraints, T = unknown> {
    *
    * This implementation *should* drain, truncate or otherwise reset the log buffer.
    */
-  getter: (driver: Driver<C>) => Promise<T[]>;
+  getter: (driver: any) => Promise<unknown> | unknown;
 }
 
-export interface ISettingsCommands {
+export interface ISettingsCommands<T extends object = object> {
   /**
    * Update the session's settings dictionary with a new settings object
    *
    * @param settings - A key-value map of setting names to values. Settings not named in the map
    * will not have their value adjusted.
    */
-  updateSettings: (settings: StringRecord) => Promise<void>;
+  updateSettings: (settings: T) => Promise<void>;
 
   /**
    * Get the current settings for the session
    *
    * @returns The settings object
    */
-  getSettings(): Promise<StringRecord>;
+  getSettings(): Promise<T>;
 }
 
-export interface SessionHandler<
-  CreateResult,
-  DeleteResult,
-  C extends Constraints = BaseDriverCapConstraints,
-  Extra extends StringRecord | void = void
+/**
+ * @see {@linkcode ISessionHandler}
+ */
+export type DefaultCreateSessionResult<C extends Constraints> = [
+  sessionId: string,
+  capabilities: DriverCaps<C>,
+];
+
+/**
+ * @see {@linkcode ISessionHandler}
+ */
+export type DefaultDeleteSessionResult = void;
+
+/**
+ * An interface which creates and deletes sessions.
+ */
+export interface ISessionHandler<
+  C extends Constraints = Constraints,
+  CreateResult = DefaultCreateSessionResult<C>,
+  DeleteResult = DefaultDeleteSessionResult,
+  SessionData extends StringRecord = StringRecord,
 > {
   /**
    * Start a new automation session
@@ -419,10 +435,10 @@ export interface SessionHandler<
    * @returns The capabilities object representing the created session
    */
   createSession(
-    w3cCaps1: W3CCapabilities<C, Extra>,
-    w3cCaps2?: W3CCapabilities<C, Extra>,
-    w3cCaps3?: W3CCapabilities<C, Extra>,
-    driverData?: DriverData[]
+    w3cCaps1: W3CDriverCaps<C>,
+    w3cCaps2?: W3CDriverCaps<C>,
+    w3cCaps3?: W3CDriverCaps<C>,
+    driverData?: DriverData[],
   ): Promise<CreateResult>;
 
   /**
@@ -432,7 +448,21 @@ export interface SessionHandler<
    * @param sessionId - the id of the session that is to be deleted
    * @param driverData - the driver data for other currently-running sessions
    */
-  deleteSession(sessionId?: string, driverData?: DriverData[]): Promise<DeleteResult>;
+  deleteSession(sessionId?: string, driverData?: DriverData[]): Promise<DeleteResult | void>;
+
+  /**
+   * Get data for all sessions running on an Appium server
+   *
+   * @returns A list of session data objects
+   */
+  getSessions(): Promise<MultiSessionData[]>;
+
+  /**
+   * Get the data for the current session
+   *
+   * @returns A session data object
+   */
+  getSession(): Promise<SingularSessionData<C, SessionData>>;
 }
 
 /**
@@ -440,19 +470,6 @@ export interface SessionHandler<
  */
 export type DriverData = Record<string, unknown>;
 
-/**
- * Extensions can define new methods for the Appium server to map to command names, of the same
- * format as used in Appium's `routes.js`.
- *
- *
- * @example
- * {
- *   '/session/:sessionId/new_method': {
- *     GET: {command: 'getNewThing'},
- *     POST: {command: 'setNewThing', payloadParams: {required: ['someParam']}}
- *   }
- * }
- */
 export interface Constraint {
   readonly presence?: boolean | Readonly<{allowEmpty: boolean}>;
   readonly isString?: boolean;
@@ -461,29 +478,33 @@ export interface Constraint {
   readonly isObject?: boolean;
   readonly isArray?: boolean;
   readonly deprecated?: boolean;
-  readonly inclusion?: Readonly<[any, ...any[]]>;
-  readonly inclusionCaseInsensitive?: Readonly<[any, ...any[]]>;
+  readonly inclusion?: Readonly<[string, ...string[]]>;
+  readonly inclusionCaseInsensitive?: Readonly<[string, ...string[]]>;
 }
-export type Constraints = Readonly<Record<string, Constraint>>;
 
-export interface DriverHelpers<C extends Constraints> {
-  configureApp: (app: string, supportedAppExtensions: string[]) => Promise<string>;
+/**
+ * A collection of constraints describing the allowed capabilities for a driver.
+ */
+export type Constraints = {
+  readonly [name: string]: Constraint;
+};
+
+export interface DriverHelpers {
+  configureApp: (
+    app: string,
+    supportedAppExtensions?: string | string[] | ConfigureAppOptions,
+  ) => Promise<string>;
   isPackageOrBundle: (app: string) => boolean;
   duplicateKeys: <T>(input: T, firstKey: string, secondKey: string) => T;
   parseCapsArray: (cap: string | string[]) => string[];
-  generateDriverLogPrefix: (obj: Core<C>, sessionId?: string) => string;
+  generateDriverLogPrefix: (obj: object, sessionId?: string) => string;
 }
 
 export type SettingsUpdateListener<T extends Record<string, unknown> = Record<string, unknown>> = (
   prop: keyof T,
   newValue: unknown,
-  curValue: unknown
+  curValue: unknown,
 ) => Promise<void>;
-
-export interface DeviceSettings<T = any> {
-  update(newSettings: Record<string, T>): Promise<void>;
-  getSettings(): Record<string, T>;
-}
 
 // WebDriver
 
@@ -512,36 +533,7 @@ export interface Cookie {
   sameSite?: 'Lax' | 'Strict';
 }
 
-// Appium W3C WebDriver Extension
-
-export interface StartScreenRecordOptions {
-  remotePath?: string;
-  username?: string;
-  password?: string;
-  method?: string;
-  forceRestart?: boolean;
-  timeLimit?: string;
-  videoType?: string;
-  videoQuality?: string;
-  videoFps?: string;
-  videoScale?: string;
-  bitRate?: string;
-  videoSize?: string;
-  bugReport?: string;
-}
-
-export interface StopScreenRecordOptions {
-  remotePath?: string;
-  user?: string;
-  pass?: string;
-  method?: string;
-  headers?: Record<string, string>;
-  fileFieldName?: string;
-  formFields: Record<string, string> | Entries<Record<string, string>>;
-}
-
 // JSONWP
-
 export type Size = Pick<Rect, 'width' | 'height'>;
 
 export type Position = Pick<Rect, 'x' | 'y'>;
@@ -570,6 +562,8 @@ export interface Credential {
   largeBlob?: string;
 }
 
+export type Orientation = 'LANDSCAPE' | 'PORTRAIT';
+
 export interface EventHistory {
   commands: EventHistoryCommand[];
   [key: string]: any;
@@ -581,18 +575,26 @@ export interface EventHistoryCommand {
   endTime: number;
 }
 
+export type Protocol = 'MJSONWP' | 'W3C';
+
+export interface DriverStatus {
+  ready: boolean,
+  message: string,
+  [key: string]: any;
+}
+
 /**
  * Methods and properties which both `AppiumDriver` and `BaseDriver` inherit.
  *
  * This should not be used directly by external code.
  */
-export interface Core<C extends Constraints = BaseDriverCapConstraints> {
+export interface Core<C extends Constraints, Settings extends StringRecord = StringRecord> {
   shouldValidateCaps: boolean;
   sessionId: string | null;
   opts: DriverOpts<C>;
-  initialOpts: ServerArgs;
-  protocol?: string;
-  helpers: DriverHelpers<C>;
+  initialOpts: InitialOpts;
+  protocol?: Protocol;
+  helpers: DriverHelpers;
   basePath: string;
   relaxedSecurityEnabled: boolean;
   allowInsecure: string[];
@@ -602,11 +604,17 @@ export interface Core<C extends Constraints = BaseDriverCapConstraints> {
   locatorStrategies: string[];
   webLocatorStrategies: string[];
   eventEmitter: EventEmitter;
-  settings: DeviceSettings;
+  settings: IDeviceSettings<Settings>;
   log: AppiumLogger;
-  driverData?: DriverData;
+  driverData: DriverData;
   isCommandsQueueEnabled: boolean;
   eventHistory: EventHistory;
+  bidiEventSubs: Record<string, string[]>;
+  /**
+   * @deprecated Drivers no longer need to opt into BiDi support explicitly
+   */
+  doesSupportBidi?: boolean;
+  updateBidiCommands(cmds: BidiModuleMap): void;
   onUnexpectedShutdown(handler: () => any): void;
   /**
    * @summary Retrieve the server's current status.
@@ -640,21 +648,22 @@ export interface Core<C extends Constraints = BaseDriverCapConstraints> {
    * ```
    */
   getStatus(): Promise<any>;
-  sessionExists(sessionId: string): boolean;
+  sessionExists(sessionId?: string): boolean;
   isW3CProtocol(): boolean;
   isMjsonwpProtocol(): boolean;
   isFeatureEnabled(name: string): boolean;
   assertFeatureEnabled(name: string): void;
   validateLocatorStrategy(strategy: string, webContext?: boolean): void;
   proxyActive(sessionId?: string): boolean;
+  get bidiProxyUrl(): string | null;
   getProxyAvoidList(sessionId?: string): RouteMatcher[];
   canProxy(sessionId?: string): boolean;
-  proxyRouteIsAvoided(sessionId: string, method: string, url: string): boolean;
+  proxyRouteIsAvoided(sessionId: string, method: string, url: string, body?: any): boolean;
   addManagedDriver(driver: Driver): void;
-  getManagedDrivers(): Driver[];
+  getManagedDrivers(): Driver<Constraints>[];
   clearNewCommandTimeout(): Promise<void>;
   logEvent(eventName: string): void;
-  driverForSession(sessionId: string): Core<C> | null;
+  driverForSession(sessionId: string): Core<Constraints> | null;
 }
 
 /**
@@ -663,25 +672,32 @@ export interface Core<C extends Constraints = BaseDriverCapConstraints> {
  *
  * `C` should be the constraints of the driver.
  * `CArgs` would be the shape of `cliArgs`.
- * `Ctx` would be the type of the element context (e.g., string, dictionary of some sort, etc.)
+ * `Settings` is the shape of the raw device settings object (see {@linkcode IDeviceSettings})
  */
 export interface Driver<
-  C extends Constraints = BaseDriverCapConstraints,
+  C extends Constraints = Constraints,
   CArgs extends StringRecord = StringRecord,
-  Ctx = any
-> extends ISessionCommands,
-    ILogCommands<C>,
-    IFindCommands<Ctx>,
-    ISettingsCommands,
+  Settings extends StringRecord = StringRecord,
+  CreateResult = DefaultCreateSessionResult<C>,
+  DeleteResult = DefaultDeleteSessionResult,
+  SessionData extends StringRecord = StringRecord,
+> extends ILogCommands,
+    IFindCommands,
+    ISettingsCommands<Settings>,
     ITimeoutCommands,
     IEventCommands,
     IExecuteCommands,
-    SessionHandler<[sessionId: string, caps: any], void, C>,
-    Core {
+    ISessionHandler<C, CreateResult, DeleteResult, SessionData>,
+    Core<C, Settings> {
   /**
    * The set of command line arguments set for this driver
    */
   cliArgs: CArgs;
+  // The following properties are assigned by appium */
+  server?: AppiumServer;
+  serverHost?: string;
+  serverPort?: number;
+  serverPath?: string;
 
   // The following methods are implemented by `BaseDriver`.
 
@@ -694,6 +710,12 @@ export interface Driver<
    * @returns The result of running the command
    */
   executeCommand(cmd: string, ...args: any[]): Promise<any>;
+
+  /** Execute a driver (WebDriver Bidi protocol) command by its name as defined in the bidi commands file
+   * @param bidiCmd - the name of the command in the bidi spec
+   * @param args - arguments to pass to the command
+   */
+  executeBidiCommand(bidiCmd: string, ...args: any[]): Promise<BiDiResultData>;
 
   /**
    * Signify to any owning processes that this driver encountered an error which should cause the
@@ -713,6 +735,7 @@ export interface Driver<
    * Reset the current session (run the delete session and create session subroutines)
    *
    * @deprecated Use explicit session management commands instead
+   * @privateRemarks This is implemented by `BaseDriver` and is used within `@appium/driver-test-support`
    */
   reset(): Promise<void>;
 
@@ -740,7 +763,7 @@ export interface Driver<
    *
    * @returns Whether or not the capabilities are valid
    */
-  validateDesiredCaps(caps: Capabilities<C>): boolean;
+  validateDesiredCaps(caps: DriverCaps<C>): boolean;
 
   /**
    * A helper function to log unrecognized capabilities to the console
@@ -749,7 +772,7 @@ export interface Driver<
    *
    * @internal
    */
-  logExtraCaps(caps: Capabilities<C>): void;
+  logExtraCaps(caps: DriverCaps<C>): void;
 
   /**
    * A helper function used to assign server information to the driver instance so the driver knows
@@ -767,14 +790,15 @@ export interface Driver<
  * External drivers must subclass `BaseDriver`, and can implement any of these methods.
  * None of these are implemented within Appium itself.
  */
-export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints>
-  extends Driver<C> {
-  // The following properties are assigned by appium */
-  server?: AppiumServer;
-  serverHost?: string;
-  serverPort?: number;
-  serverPath?: string;
-
+export interface ExternalDriver<
+  C extends Constraints = Constraints,
+  Ctx = string,
+  CArgs extends StringRecord = StringRecord,
+  Settings extends StringRecord = StringRecord,
+  CreateResult = DefaultCreateSessionResult<C>,
+  DeleteResult = DefaultDeleteSessionResult,
+  SessionData extends StringRecord = StringRecord,
+> extends Driver<C, CArgs, Settings, CreateResult, DeleteResult, SessionData> {
   // WebDriver spec commands
 
   /**
@@ -1216,13 +1240,6 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
   // Appium W3C WebDriver Extension
 
   /**
-   * Shake the device
-   *
-   * @deprecated
-   */
-  mobileShake?(): Promise<void>;
-
-  /**
    * Get the current time on the device under timeouts
    *
    * @param format - the date/time format you would like the response into
@@ -1230,52 +1247,6 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @returns The formatted time
    */
   getDeviceTime?(format?: string): Promise<string>;
-
-  /**
-   * Lock the device, and optionally unlock the device after a certain amount of time
-   *
-   * @param seconds - the number of seconds after which to unlock the device. Set to zero or leave
-   * empty to not unlock the device automatically
-   *
-   * @deprecated
-   */
-  lock?(seconds?: number): Promise<void>;
-
-  /**
-   * Unlock the device
-   *
-   * @deprecated
-   */
-  unlock?(): Promise<void>;
-
-  /**
-   * Determine whether the device is locked
-   *
-   * @returns True if the device is locked, false otherwise
-   *
-   * @deprecated
-   */
-  isLocked?(): Promise<boolean>;
-
-  /**
-   * Direct Appium to start recording the device screen
-   *
-   * @param options - parameters for screen recording
-   *
-   * @deprecated
-   */
-  startRecordingScreen?(options?: StartScreenRecordOptions): Promise<void>;
-
-  /**
-   * Direct Appium to stop screen recording and return the video
-   *
-   * @param options - parameters for stopping like video Uploading
-   *
-   * @returns The base64-encoded video data
-   *
-   * @deprecated
-   */
-  stopRecordingScreen?(options?: StopScreenRecordOptions): Promise<string>;
 
   /**
    * List the performance data types supported by this driver, which can be used in a call to get
@@ -1302,8 +1273,8 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
   getPerformanceData?(
     packageName: string,
     dataType: string,
-    dataReadTimeout?: number
-  ): Promise<string[]>;
+    dataReadTimeout?: number,
+  ): Promise<any>;
 
   /**
    * Press a device hardware key by its code for the default duration
@@ -1324,6 +1295,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param flags - the code denoting the combination of extra flags
    *
    * @deprecated
+   *
    */
   longPressKeyCode?(keycode: number, metastate?: number, flags?: number): Promise<void>;
 
@@ -1364,7 +1336,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated
    */
-  gsmSignal?(signalStrength: string): Promise<void>;
+  gsmSignal?(signalStrength: string | number): Promise<void>;
 
   /**
    * Do something with GSM voice (unclear; this should not be implemented anywhere)
@@ -1372,6 +1344,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param state - the state
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   gsmVoice?(state: string): Promise<void>;
 
@@ -1410,29 +1383,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated
    */
-  keyevent?(keycode: string, metastate?: string): Promise<void>;
-
-  /**
-   * Construct a rotation gesture? Unclear what this command does and it does not appear to be used
-   *
-   * @param x - the x coordinate of the rotation center
-   * @param y - the y coordinate of the rotation center
-   * @param radius - the radius of the rotation circle
-   * @param rotation - the rotation angle? idk
-   * @param touchCount - how many fingers to rotate
-   * @param elementId - if we're rotating around an element
-   *
-   * @deprecated Use setRotation instead
-   */
-  mobileRotation?(
-    x: number,
-    y: number,
-    radius: number,
-    rotation: number,
-    touchCount: number,
-    duration: string,
-    elementId?: string
-  ): Promise<void>;
+  keyevent?(keycode: string | number, metastate?: string | number): Promise<void>;
 
   /**
    * Get the current activity name
@@ -1440,6 +1391,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @returns The activity name
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   getCurrentActivity?(): Promise<string>;
 
@@ -1449,6 +1401,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @returns The package name
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   getCurrentPackage?(): Promise<string>;
 
@@ -1473,8 +1426,10 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @param appId - the package or bundle ID of the application
    * @param options - driver-specific launch options
+   *
+   * @returns `true` if successful
    */
-  removeApp?(appId: string, options?: unknown): Promise<void>;
+  removeApp?(appId: string, options?: unknown): Promise<boolean>;
 
   /**
    * Quit / terminate / stop a running application
@@ -1482,7 +1437,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param appId - the package or bundle ID of the application
    * @param options - driver-specific launch options
    */
-  terminateApp?(appId: string, options?: unknown): Promise<void>;
+  terminateApp?(appId: string, options?: unknown): Promise<boolean>;
 
   /**
    * Determine whether an app is installed
@@ -1496,10 +1451,11 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @param appId - the package or bundle ID of the application
    *
-   * @returns A number representing the state. 0 means not installed, 1 means not running, 3 means
-   * running in the background, and 4 means running in the foreground
+   * @returns A number representing the state. `0` means not installed, `1` means not running, `2`
+   * means running in background but suspended, `3` means running in the background, and `4` means
+   * running in the foreground
    */
-  queryAppState?(appId: string): Promise<0 | 1 | 3 | 4>;
+  queryAppState?(appId: string): Promise<0 | 1 | 2 | 3 | 4>;
 
   /**
    * Attempt to hide a virtual keyboard
@@ -1508,8 +1464,15 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param key - the text of a key to use to hide the keyboard
    * @param keyCode - a key code to trigger to hide the keyboard
    * @param keyName - the name of a key to use to hide the keyboard
+   *
+   * @returns Whether the keyboard was successfully hidden. May never return `false` on some platforms
    */
-  hideKeyboard?(strategy?: string, key?: string, keyCode?: string, keyName?: string): Promise<void>;
+  hideKeyboard?(
+    strategy?: string,
+    key?: string,
+    keyCode?: string,
+    keyName?: string,
+  ): Promise<boolean>;
 
   /**
    * Determine whether the keyboard is shown
@@ -1548,6 +1511,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Toggle airplane/flight mode for the device
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   toggleFlightMode?(): Promise<void>;
 
@@ -1555,6 +1519,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Toggle cell network data
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   toggleData?(): Promise<void>;
 
@@ -1562,6 +1527,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Toggle WiFi radio status
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   toggleWiFi?(): Promise<void>;
 
@@ -1569,6 +1535,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Toggle location services for the device
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   toggleLocationServices?(): Promise<void>;
 
@@ -1576,6 +1543,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Open the notifications shade/screen
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   openNotifications?(): Promise<void>;
 
@@ -1595,6 +1563,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * activity
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   startActivity?(
     appPackage: string,
@@ -1605,7 +1574,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
     intentCategory?: string,
     intentFlags?: string,
     optionalIntentArguments?: string,
-    dontStopAppOnReset?: boolean
+    dontStopAppOnReset?: boolean,
   ): Promise<void>;
 
   /**
@@ -1615,7 +1584,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated
    */
-  getSystemBars?(): Promise<unknown[]>;
+  getSystemBars?(): Promise<unknown>;
 
   /**
    * Get the display's pixel density
@@ -1623,49 +1592,9 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @returns The density
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   getDisplayDensity?(): Promise<number>;
-
-  /**
-   * Trigger a touch/fingerprint match or match failure
-   *
-   * @param match - whether the match should be a success or failure
-   *
-   * @deprecated
-   */
-  touchId?(match: boolean): Promise<void>;
-
-  /**
-   * Toggle whether the device is enrolled in the touch ID program
-   *
-   * @param enabled - whether to enable or disable the touch ID program
-   *
-   * @deprecated
-   */
-  toggleEnrollTouchId?(enabled: boolean): Promise<void>;
-
-  /**
-   * Start the session after it has been started.
-   *
-   * @deprecated Don't use this, it never made sense.
-   */
-  launchApp?(): Promise<void>;
-
-  /**
-   * Stop the session without stopping the session
-   *
-   * @deprecated Don't use this, it never made sense.
-   */
-  closeApp?(): Promise<void>;
-
-  /**
-   * Background (close) the app either permanently or for a certain amount of time
-   *
-   * @param seconds - the number of seconds to background the app for, or `null` for permanently
-   *
-   * @deprecated
-   */
-  background?(seconds: null | number): Promise<void>;
 
   /**
    * End platform-specific code coverage tracing
@@ -1674,30 +1603,9 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param path - the path to place the results
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   endCoverage?(intent: string, path: string): Promise<void>;
-
-  /**
-   * Return the language-specific strings for an app
-   *
-   * @param language - the language to retrieve strings for
-   * @param stringFile - the path to the localized strings file if not in the default location
-   *
-   * @returns A record of localized keys to localized text
-   *
-   * @deprecated
-   */
-  getStrings?(language?: string, stringFile?: string): Promise<Record<string, unknown>>;
-
-  /**
-   * Set the value, but like, now? Don't use this.
-   *
-   * @param value - the value to set
-   * @param elementId - the element to set the value of
-   *
-   * @deprecated
-   */
-  setValueImmediate?(value: string, elementId: string): Promise<void>;
 
   /**
    * Set the value of a text field but ensure the current value is replace and not appended
@@ -1706,93 +1614,11 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param elementId - the element to set it in
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   replaceValue?(value: string, elementId: string): Promise<void>;
 
-  /**
-   * Collect the response of an async script execution? It's unclear what this is for. Don't use
-   * it.
-   *
-   * @param response - idk
-   *
-   * @deprecated
-   */
-  receiveAsyncResponse?(response: unknown): Promise<void>;
-
-  /**
-   * Set the contents of the device clipboard
-   *
-   * @param content - the text to set
-   * @param contentType - the media type if not text
-   * @param label - the label if not text
-   *
-   * @deprecated
-   */
-  setClipboard?(content: string, contentType?: string, label?: string): Promise<void>;
-
-  /**
-   * Get the contents of the device clipboard, converted into an appropriate media type
-   *
-   * @param contentType - the media type if not text
-   *
-   * @returns The text or media content (base64-encoded) of the clipboard
-   *
-   * @deprecated
-   */
-  getClipboard?(contentType?: string): Promise<string>;
-
   // JSONWP
-  /**
-   * Set the async execute script timeout
-   *
-   * @param ms - the timeout
-   *
-   * @deprecated Use the W3C timeouts command instead
-   */
-  asyncScriptTimeout?(ms: number): Promise<void>;
-
-  /**
-   * Get the window size
-   *
-   * @returns The size (width and height)
-   *
-   * @deprecated Use getWindowRect instead
-   */
-  getWindowSize?(): Promise<Size>;
-
-  /**
-   * Get the position of an element on screen
-   *
-   * @param elementId - the element ID
-   *
-   * @returns The position of the element
-   *
-   * @deprecated Use getElementRect instead
-   */
-  getLocation?(elementId: string): Promise<Position>;
-
-  /**
-   * Get the position of an element on screen within a certain other view
-   *
-   * @param elementId - the element ID
-   *
-   * @returns The position of the element
-   *
-   * @deprecated Use getElementRect instead
-   */
-  getLocationInView?(elementId: string): Promise<Position>;
-
-  /**
-   * Get the size of an element
-   *
-   * @param elementId - the element ID
-   *
-   * @returns The size of the element
-   *
-   * @deprecated Use getElementRect instead
-   */
-  getSize?(elementId: string): Promise<Size>;
-
   /**
    * Check whether two elements are identical
    *
@@ -1802,33 +1628,16 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @returns True if the elements are equal, false otherwise
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   equalsElement?(elementId: string, otherElementId: string): Promise<boolean>;
-
-  /**
-   * Submit the form an element is in
-   *
-   * @param elementId - the element ID
-   *
-   * @deprecated
-   */
-  submit?(elementId: string): Promise<void>;
-
-  /**
-   * Send keys to the app
-   *
-   * @param value: the array of keys to send
-   *
-   * @deprecated Use the W3C send keys method instead
-   */
-  keys?(value: string[]): Promise<void>;
-
   /**
    * Get the list of IME engines
    *
    * @returns The list of IME engines
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   availableIMEEngines?(): Promise<string[]>;
 
@@ -1881,22 +1690,12 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
   setOrientation?(orientation: string): Promise<void>;
 
   /**
-   * Move the mouse pointer to a particular screen location
-   *
-   * @param element - the element ID if the move is relative to an element
-   * @param xOffset - the x offset
-   * @param yOffset - the y offset
-   *
-   * @deprecated Use the Actions API instead
-   */
-  moveTo?(element?: null | string, xOffset?: number, yOffset?: number): Promise<void>;
-
-  /**
    * Trigger a mouse button down
    *
    * @param button - the button ID
    *
    * @deprecated Use the Actions API instead
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   buttonDown?(button?: number): Promise<void>;
 
@@ -1906,6 +1705,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param button - the button ID
    *
    * @deprecated Use the Actions API instead
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   buttonUp?(button?: number): Promise<void>;
 
@@ -1915,6 +1715,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param button - the button ID
    *
    * @deprecated Use the Actions API instead
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   clickCurrent?(button?: number): Promise<void>;
 
@@ -1922,6 +1723,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Double-click the current mouse location
    *
    * @deprecated Use the Actions API instead
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   doubleClick?(): Promise<void>;
 
@@ -1933,7 +1735,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated Use the Actions API instead
    */
-  touchDown?(x: number, y: number): Promise<void>;
+  touchDown?(element: string, x: number, y: number): Promise<void>;
 
   /**
    * Perform a touch up event at the location specified
@@ -1943,7 +1745,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated Use the Actions API instead
    */
-  touchUp?(x: number, y: number): Promise<void>;
+  touchUp?(element: string, x: number, y: number): Promise<void>;
 
   /**
    * Perform a touch move event at the location specified
@@ -1953,7 +1755,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated Use the Actions API instead
    */
-  touchMove?(x: number, y: number): Promise<void>;
+  touchMove?(element: string, x: number, y: number): Promise<void>;
 
   /**
    * Perform a long touch down event at the location specified
@@ -1962,7 +1764,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @deprecated Use the Actions API instead
    */
-  touchLongClick?(elementId: string): Promise<void>;
+  touchLongClick?(element: string, x: number, y: number, duration: number): Promise<void>;
 
   /**
    * Perform a flick event at the location specified
@@ -1975,6 +1777,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @param speed - the speed (unclear how this relates to xSpeed and ySpeed)
    *
    * @deprecated Use the Actions API instead
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   flick?(
     element?: string,
@@ -1982,7 +1785,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
     ySpeed?: number,
     xOffset?: number,
     yOffset?: number,
-    speed?: number
+    speed?: number,
   ): Promise<void>;
 
   /**
@@ -1996,8 +1799,9 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * Set the virtual geographical location of a device
    *
    * @param location - the location including latitude and longitude
+   * @returns The complete location
    */
-  setGeoLocation?(location: Partial<Location>): Promise<void>;
+  setGeoLocation?(location: Partial<Location>): Promise<Location>;
 
   // MJSONWIRE
 
@@ -2007,7 +1811,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @returns The context name
    */
-  getCurrentContext?(): Promise<string | null>;
+  getCurrentContext?(): Promise<Ctx | null>;
 
   /**
    * Switch to a context by name
@@ -2015,7 +1819,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @param name - the context name
    */
-  setContext?(name: string): Promise<void>;
+  setContext?(name: string, ...args: any[]): Promise<void>;
 
   /**
    * Get the list of available contexts
@@ -2023,7 +1827,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    *
    * @returns The list of context names
    */
-  getContexts?(): Promise<string[]>;
+  getContexts?(): Promise<Ctx[]>;
 
   /**
    * Get the index of an element on the page
@@ -2033,6 +1837,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @returns The page index
    *
    * @deprecated
+   * @privateRemarks Not implemented in `appium-xcuitest-driver`
    */
   getPageIndex?(elementId: string): Promise<string>;
 
@@ -2050,27 +1855,10 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
    * @see {@link https://github.com/SeleniumHQ/mobile-spec/blob/master/spec-draft.md#device-modes}
    *
    * @param type - the bitmask representing network state
+   * @returns A number which is a bitmask representing categories like Data, Wifi, and Airplane
+   * mode status
    */
-  setNetworkConnection?(type: number): Promise<void>;
-
-  /**
-   * Perform a set of touch actions
-   *
-   * @param actions - the old MJSONWP style touch action objects
-   *
-   * @deprecated Use the W3C Actions API instead
-   */
-  performTouch?(actions: unknown): Promise<void>;
-
-  /**
-   * Perform a set of touch actions
-   *
-   * @param actions - the old MJSONWP style touch action objects
-   * @param elementId - the id of an element if actions are restricted to one element
-   *
-   * @deprecated Use the W3C Actions API instead
-   */
-  performMultiAction?(actions: unknown, elementId: string): Promise<void>;
+  setNetworkConnection?(type: number): Promise<number>;
 
   /**
    * Get the current rotation state of the device
@@ -2123,7 +1911,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
     hasResidentKey?: boolean,
     hasUserVerification?: boolean,
     isUserConsenting?: boolean,
-    isUserVerified?: boolean
+    isUserVerified?: boolean,
   ): Promise<string>;
 
   /**
@@ -2153,7 +1941,7 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
     privateKey: string,
     userHandle: string,
     signCount: number,
-    authenticatorId: string
+    authenticatorId: string,
   ): Promise<void>;
 
   /**
@@ -2190,14 +1978,19 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
   /**
    * Proxy a command to a connected WebDriver server
    *
-   * @typeParam T - the type of the return value
+   * @typeParam TReq - the type of the incoming body
+   * @typeParam TRes - the type of the return value
    * @param url - the incoming URL
    * @param method - the incoming HTTP method
    * @param body - the incoming HTTP body
    *
    * @returns The return value of the proxied command
    */
-  proxyCommand?<T = any>(url: string, method: HTTPMethod, body?: string): Promise<T>;
+  proxyCommand?<TReq = any, TRes = unknown>(
+    url: string,
+    method: HTTPMethod,
+    body?: TReq,
+  ): Promise<TRes>;
 }
 
 /**
@@ -2205,11 +1998,28 @@ export interface ExternalDriver<C extends Constraints = BaseDriverCapConstraints
  *
  * This is likely unusable by external consumers, but YMMV!
  */
-export interface DriverStatic<D extends Driver> {
+export interface DriverStatic<T extends Driver> {
   baseVersion: string;
   updateServer?: UpdateServerCallback;
-  newMethodMap?: MethodMap<D>;
-  executeMethodMap?: ExecuteMethodMap<D>;
+  newMethodMap?: MethodMap<T>;
+  /**
+    * Drivers can define new custom bidi commands and map them to driver methods. The format must
+    * be the same as that used by Appium's bidi-commands.js file, for example:
+    * @example
+    * {
+    *   myNewBidiModule: {
+    *     myNewBidiCommand: {
+    *       command: 'driverMethodThatWillBeCalled',
+    *       params: {
+    *         required: ['requiredParam'],
+    *         optional: ['optionalParam'],
+    *       }
+    *     }
+    *   }
+    * }
+    */
+  newBidiCommands?: BidiModuleMap;
+  executeMethodMap?: ExecuteMethodMap<T>;
 }
 
 /**
@@ -2217,9 +2027,9 @@ export interface DriverStatic<D extends Driver> {
  *
  * This is likely unusable by external consumers, but YMMV!
  */
-export type DriverClass<D extends Driver = ExternalDriver> = Class<
-  D,
-  DriverStatic<D>,
+export type DriverClass<T extends Driver = Driver> = Class<
+  T,
+  DriverStatic<T>,
   [] | [Partial<ServerArgs>] | [Partial<ServerArgs>, boolean]
 >;
 
@@ -2228,22 +2038,152 @@ export interface ExtraDriverOpts {
   skipUninstall?: boolean;
 }
 /**
- * Options as passed into a driver constructor, which is just a union of {@linkcode ServerArgs} and {@linkcode Capabilities}.
- *
- * The combination happens within Appium prior to calling the constructor.
+ * Options as set within {@linkcode ExternalDriver.createSession}, which is a union of {@linkcode InitialOpts} and {@linkcode DriverCaps}.
  */
-export type DriverOpts<C extends Constraints = BaseDriverCapConstraints> = ServerArgs &
-  ExtraDriverOpts &
-  Partial<ConstraintsToCaps<C>>;
+export type DriverOpts<C extends Constraints> = InitialOpts & DriverCaps<C>;
 
-export type DriverCommand<TArgs = any, TReturn = unknown> = (...args: TArgs[]) => Promise<TReturn>;
+/**
+ * Options as provided to the {@linkcode Driver} constructor.
+ */
+export type InitialOpts = Merge<ServerArgs, ExtraDriverOpts>;
 
-export type DriverCommands<TArgs = any, TReturn = unknown> = Record<
-  string,
-  DriverCommand<TArgs, TReturn>
->;
+/**
+ * An instance method of a driver class, whose name may be referenced by {@linkcode MethodDef.command}, and serves as an Appium command.
+ *
+ * Note that this signature differs from a `PluginCommand`.
+ */
+export type DriverCommand<TArgs extends readonly any[] = any[], TRetval = unknown> = (
+  ...args: TArgs
+) => Promise<TRetval>;
 
 /**
  * Tuple of an HTTP method with a regex matching a request path
  */
 export type RouteMatcher = [HTTPMethod, RegExp];
+
+/**
+ * Result of the {@linkcode onPostProcess ConfigureAppOptions.onPostProcess} callback.
+ */
+export interface PostProcessResult {
+  /**
+   * The full past to the post-processed application package on the local file system .
+   *
+   * This might be a file or a folder path.
+   */
+  appPath: string;
+}
+
+/**
+ * Information about a cached app instance.
+ */
+export interface CachedAppInfo {
+  /**
+   * SHA1 hash of the package if it is a file (and not a folder)
+   */
+  packageHash: string;
+  /**
+   * Date instance; the value of the file's `Last-Modified` header
+   */
+  lastModified?: Date|null;
+  /**
+   * The value of the file's `Etag` header
+   */
+  etag?: string|null;
+  /**
+   * `true` if the file contains an `immutable` mark in `Cache-control` header
+   */
+  immutable?: boolean;
+  /**
+   * Integer representation of `maxAge` parameter in `Cache-control` header
+   */
+  maxAge?: number|null;
+  /**
+   * The timestamp this item has been added to the cache (measured in Unix epoch milliseconds)
+   */
+  timestamp?: number;
+  /**
+   * An object containing either `file` property with SHA1 hash of the file or `folder` property
+   * with total amount of cached files and subfolders
+   */
+  integrity?: {file?: string} | {folder?: number};
+  /**
+   * The full path to the cached app
+   */
+  fullPath?: string;
+}
+
+/**
+ * Options for the post-processing step
+ *
+ * The generic can be supplied if using `axios`, where `headers` is a fancy object.
+ */
+export interface PostProcessOptions<Headers = HTTPHeaders> {
+  /**
+   * The original application url or path
+   */
+  originalAppLink: string;
+  /**
+   * The information about the previously cached app instance (if exists)
+   */
+  cachedAppInfo?: CachedAppInfo;
+  /**
+   * Whether the app has been downloaded from a remote URL
+   */
+  isUrl?: boolean;
+  /**
+   * Optional headers object.
+   *
+   * Only present if `isUrl` is `true` and if the server responds to `HEAD` requests. All header names are normalized to lowercase.
+   */
+  headers?: Headers;
+  /**
+   * A string containing full path to the preprocessed application package (either downloaded or a local one)
+   */
+  appPath?: string;
+}
+
+export interface DownloadAppOptions<Headers = HTTPHeaders> {
+  /**
+   * The original application url.
+   */
+  url: string;
+  /**
+   * Response headers from the download url.
+   */
+  headers: Headers;
+
+  /**
+   * Response stream.
+   */
+  stream: internal.Readable;
+}
+
+export interface ConfigureAppOptions {
+  /**
+   *
+   * Optional function, which should be applied to the application after it is
+   * downloaded/preprocessed.
+   *
+   * This function may be async and is expected to accept single object parameter. The function is
+   * expected to either return a falsy value, which means the app must not be cached and a fresh
+   * copy of it is downloaded each time, _or_ if this function returns an object containing an
+   * `appPath` property, then the integrity of it will be verified and stored into the cache.
+   * @returns
+   */
+  onPostProcess?: (
+    obj: PostProcessOptions,
+  ) => Promise<PostProcessResult | undefined> | PostProcessResult | undefined;
+  /**
+   * Optional function, which should be applied to the application upon download
+   * progress initialization instead of the standard download handler.
+   * The callback does not get invoked if the original application is not a URL.
+   * It is expected that `onPostProcess` is also provided if this callback is defined.
+   * Otherwise, there is a possibility the app configuration flow could be broken.
+   *
+   * @returns The full path to the downloaded app
+   */
+  onDownload?: (
+    obj: DownloadAppOptions,
+  ) => Promise<string>;
+  supportedExtensions: string[];
+}

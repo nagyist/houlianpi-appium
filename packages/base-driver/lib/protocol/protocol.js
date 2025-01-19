@@ -1,5 +1,5 @@
 import _ from 'lodash';
-import {util, logger, node} from '@appium/support';
+import {util, logger} from '@appium/support';
 import {validators} from './validators';
 import {
   errors,
@@ -13,12 +13,14 @@ import B from 'bluebird';
 import {formatResponseValue, formatStatus} from './helpers';
 import {MAX_LOG_BODY_LENGTH, PROTOCOLS, DEFAULT_BASE_PATH} from '../constants';
 import {isW3cCaps} from '../helpers/capabilities';
+import log from '../basedriver/logger';
+import { generateDriverLogPrefix } from '../basedriver/helpers';
 
 const CREATE_SESSION_COMMAND = 'createSession';
 const DELETE_SESSION_COMMAND = 'deleteSession';
 const GET_STATUS_COMMAND = 'getStatus';
 
-/** type {Set<string>} */
+/** @type {Set<string>} */
 const deprecatedCommandsLogged = new Set();
 
 function determineProtocol(createSessionArgs) {
@@ -59,12 +61,7 @@ function getLogger(driver, sessionId = null) {
     return dstDriver.log;
   }
 
-  let logPrefix = dstDriver.constructor
-    ? `${dstDriver.constructor.name}@${node.getObjectId(dstDriver).substring(0, 8)}`
-    : 'AppiumDriver';
-  if (sessionId) {
-    logPrefix += ` (${sessionId.substring(0, 8)})`;
-  }
+  const logPrefix = generateDriverLogPrefix(dstDriver);
   return logger.getLogger(logPrefix);
 }
 
@@ -225,7 +222,7 @@ function validateExecuteMethodParams(params, paramSpec) {
         `arguments to execute script and instead received: ${JSON.stringify(params)}`
     );
   }
-  const args = params[0] ?? {};
+  let args = params[0] ?? {};
   if (!_.isPlainObject(args)) {
     throw new errors.InvalidArgumentError(
       `Did not receive an appropriate execute method parameters object. It needs to be ` +
@@ -237,6 +234,11 @@ function validateExecuteMethodParams(params, paramSpec) {
   } else {
     paramSpec.required ??= [];
     paramSpec.optional ??= [];
+    const unknownNames = _.difference(_.keys(args), paramSpec.required, paramSpec.optional);
+    if (!_.isEmpty(unknownNames)) {
+      log.info(`The following script arguments are not known and will be ignored: ${unknownNames}`);
+      args = _.pickBy(args, (v, k) => !unknownNames.includes(k));
+    }
     checkParams(paramSpec, args, null);
   }
   const argsToApply = makeArgs({}, args, paramSpec, null);
@@ -253,9 +255,7 @@ function routeConfiguringFunction(driver) {
     throw new Error('Drivers must implement `sessionExists` property');
   }
 
-  // "execute" isn't defined anywhere
-  // @ts-expect-error
-  if (!(driver.executeCommand || driver.execute)) {
+  if (!(/** @type {any} */ (driver).executeCommand || /** @type {any} */ (driver).execute)) {
     throw new Error('Drivers must implement `executeCommand` or `execute` method');
   }
 
@@ -277,7 +277,7 @@ function routeConfiguringFunction(driver) {
           `${basePath}${path}`,
           spec,
           driver,
-          isSessionCommand(spec.command)
+          isSessionCommand(/** @type {import('@appium/types').DriverMethodDef} */ (spec).command)
         );
       }
     }
@@ -454,7 +454,16 @@ function buildHandler(app, method, path, spec, driver, isSessCmd) {
     } catch (err) {
       // if anything goes wrong, figure out what our response should be
       // based on the type of error that we encountered
-      let actualErr = err;
+      let actualErr;
+      if (err instanceof Error || (_.has(err, 'stack') && _.has(err, 'message'))) {
+        actualErr = err;
+      } else {
+        getLogger(driver, req.params.sessionId || newSessionId).warn(
+          'The thrown error object does not seem to be a valid instance of the Error class. This ' +
+            'might be a genuine bug of a driver or a plugin.'
+        );
+        actualErr = new Error(`${err ?? 'unknown'}`);
+      }
 
       currentProtocol =
         currentProtocol || extractProtocol(driver, req.params.sessionId || newSessionId);

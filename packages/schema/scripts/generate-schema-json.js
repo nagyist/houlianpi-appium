@@ -29,7 +29,7 @@ const JSON_FILENAME = 'appium-config.schema.json';
 /**
  * Path to the schema artifact.
  */
-const SCHEMA_SRC = path.join(SCHEMA_ROOT, 'build', 'appium-config-schema.js');
+const SCHEMA_SRC = path.join(SCHEMA_ROOT, 'build', 'lib', 'appium-config-schema.js');
 
 /**
  * Full path to output `.json`
@@ -41,7 +41,7 @@ async function write() {
   let schema;
   try {
     ({AppiumConfigJsonSchema: schema} = require(SCHEMA_SRC));
-  } catch (err) {
+  } catch {
     throw new Error(
       `${error} Failed to read ${SCHEMA_SRC}; did you execute \`npm run build\` first?`
     );

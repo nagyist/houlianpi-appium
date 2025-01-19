@@ -2,10 +2,30 @@ import {fs} from '@appium/support';
 import {ArgumentParser} from 'argparse';
 import _ from 'lodash';
 import path from 'path';
-import {DRIVER_TYPE, PLUGIN_TYPE, SERVER_SUBCOMMAND} from '../constants';
+import {
+  DRIVER_TYPE,
+  EXT_SUBCOMMAND_DOCTOR,
+  EXT_SUBCOMMAND_INSTALL,
+  EXT_SUBCOMMAND_LIST,
+  EXT_SUBCOMMAND_RUN,
+  EXT_SUBCOMMAND_UNINSTALL,
+  EXT_SUBCOMMAND_UPDATE,
+  PLUGIN_TYPE,
+  SERVER_SUBCOMMAND,
+  SETUP_SUBCOMMAND
+} from '../constants';
 import {finalizeSchema, getArgSpec, hasArgSpec} from '../schema';
 import {rootDir} from '../config';
 import {getExtensionArgs, getServerArgs} from './args';
+import {
+  DEFAULT_PLUGINS,
+  SUBCOMMAND_MOBILE,
+  SUBCOMMAND_DESKTOP,
+  SUBCOMMAND_BROWSER,
+  SUBCOMMAND_RESET,
+  getPresetDrivers,
+  determinePlatformName
+} from './setup-command';
 
 export const EXTRA_ARGS = 'extraArgs';
 
@@ -14,7 +34,7 @@ export const EXTRA_ARGS = 'extraArgs';
  * will automatially inject the `server` subcommand.
  */
 const NON_SERVER_ARGS = Object.freeze(
-  new Set([DRIVER_TYPE, PLUGIN_TYPE, SERVER_SUBCOMMAND, '-h', '--help', '-v', '--version'])
+  new Set([SETUP_SUBCOMMAND, DRIVER_TYPE, PLUGIN_TYPE, SERVER_SUBCOMMAND, '-h', '--help', '-v', '--version'])
 );
 
 const version = fs.readPackageJsonFrom(rootDir).version;
@@ -35,7 +55,8 @@ class ArgParser {
     const parser = new ArgumentParser({
       add_help: true,
       description:
-        'A webdriver-compatible server that facilitates automation of web, mobile, and other types of apps across various platforms.',
+        'A webdriver-compatible server that facilitates automation of web, mobile, and other ' +
+        'types of apps across various platforms.',
       prog,
     });
 
@@ -76,6 +97,9 @@ class ArgParser {
     // add the 'driver' and 'plugin' subcommands
     ArgParser._addExtensionCommandsToParser(subParsers);
 
+    // add the 'setup' command
+    ArgParser._addSetupToParser(subParsers);
+
     // backwards compatibility / drop-in wrapper
     /**
      * @type {ArgParser['parseArgs']}
@@ -101,6 +125,13 @@ class ArgParser {
     try {
       const parsed = this.parser.parse_known_args(args);
       const [knownArgs, unknownArgs] = parsed;
+      // XXX: you'd think that argparse, when given an alias for a subcommand,
+      // would set this value to the original subcommand name, but it doesn't.
+      if (knownArgs?.driverCommand === 'ls') {
+        knownArgs.driverCommand = 'list';
+      } else if (knownArgs?.pluginCommand === 'ls') {
+        knownArgs.pluginCommand = 'list';
+      }
       if (
         unknownArgs?.length &&
         (knownArgs.driverCommand === 'run' || knownArgs.pluginCommand === 'run')
@@ -177,15 +208,15 @@ class ArgParser {
   static _addServerToParser(subParser) {
     const serverParser = subParser.add_parser('server', {
       add_help: true,
-      help: 'Run an Appium server',
+      help: 'Start an Appium server',
+      description: 'Start an Appium server (the "server" subcommand is optional)',
     });
 
     ArgParser._patchExit(serverParser);
 
     const serverArgs = getServerArgs();
     for (const [flagsOrNames, opts] of serverArgs) {
-      // TS doesn't like the spread operator here.
-      // @ts-ignore
+      // @ts-ignore TS doesn't like the spread operator here.
       serverParser.add_argument(...flagsOrNames, {...opts});
     }
 
@@ -200,7 +231,8 @@ class ArgParser {
     for (const type of /** @type {[DriverType, PluginType]} */ ([DRIVER_TYPE, PLUGIN_TYPE])) {
       const extParser = subParsers.add_parser(type, {
         add_help: true,
-        help: `Access the ${type} management CLI commands`,
+        help: `Manage Appium ${type}s`,
+        description: `Manage Appium ${type}s using various subcommands`,
       });
 
       ArgParser._patchExit(extParser);
@@ -210,49 +242,108 @@ class ArgParser {
       });
       const extensionArgs = getExtensionArgs();
       /**
-       * @type { {command: import('appium/types').CliExtensionSubcommand, args: import('./args').ArgumentDefinitions, help: string}[] }
+       * @type { {command: import('appium/types').CliExtensionSubcommand, args: import('./args').ArgumentDefinitions, help: string, aliases?: import('argparse').SubArgumentParserOptions['aliases']}[] }
        */
       const parserSpecs = [
         {
-          command: 'list',
+          command: EXT_SUBCOMMAND_LIST,
           args: extensionArgs[type].list,
           help: `List available and installed ${type}s`,
+          aliases: ['ls'],
         },
         {
-          command: 'install',
+          command: EXT_SUBCOMMAND_INSTALL,
           args: extensionArgs[type].install,
           help: `Install a ${type}`,
         },
         {
-          command: 'uninstall',
+          command: EXT_SUBCOMMAND_UNINSTALL,
           args: extensionArgs[type].uninstall,
           help: `Uninstall a ${type}`,
         },
         {
-          command: 'update',
+          command: EXT_SUBCOMMAND_UPDATE,
           args: extensionArgs[type].update,
-          help: `Update installed ${type}s to the latest version`,
+          help: `Update one or more installed ${type}s to the latest version`,
         },
         {
-          command: 'run',
+          command: EXT_SUBCOMMAND_RUN,
           args: extensionArgs[type].run,
-          help:
-            `Run a script (defined inside the ${type}'s package.json under the ` +
-            `“scripts” field inside the “appium” field) from an installed ${type}`,
+          help: `Run a script (if available) from the given ${type}`,
+        },
+        {
+          command: EXT_SUBCOMMAND_DOCTOR,
+          args: extensionArgs[type].doctor,
+          help: `Run doctor checks (if available) for the given ${type}`,
         },
       ];
 
-      for (const {command, args, help} of parserSpecs) {
-        const parser = extSubParsers.add_parser(command, {help});
+      for (const {command, args, help, aliases} of parserSpecs) {
+        const parser = extSubParsers.add_parser(command, {help, aliases: aliases ?? []});
 
         ArgParser._patchExit(parser);
 
         for (const [flagsOrNames, opts] of args) {
           // add_argument mutates params so make sure to send in copies instead
-          // @ts-ignore
-          parser.add_argument(...flagsOrNames, {...opts});
+          if (flagsOrNames.length === 2) {
+            parser.add_argument(flagsOrNames[0], flagsOrNames[1], {...opts});
+          } else {
+            parser.add_argument(flagsOrNames[0], {...opts});
+          }
         }
       }
+    }
+  }
+
+  /**
+   * Add subcommand and sub-sub commands for 'setup' subcommand.
+   * @param {import('argparse').SubParser} subParser
+   */
+  static _addSetupToParser(subParser) {
+    const setupParser = subParser.add_parser('setup', {
+      add_help: true,
+      help: 'Batch install or uninstall Appium drivers and plugins',
+      description:
+        `Install a preset of official drivers/plugins compatible with the current host platform ` +
+        `(${determinePlatformName()}). Existing drivers/plugins will remain. The default preset ` +
+        `is "mobile". Providing the special "reset" subcommand will instead uninstall all ` +
+        `drivers and plugins, and remove their related manifest files.`,
+    });
+
+
+    ArgParser._patchExit(setupParser);
+    const extSubParsers = setupParser.add_subparsers({
+      dest: `setupCommand`,
+    });
+
+    const parserSpecs = [
+      {
+        command: SUBCOMMAND_MOBILE,
+        help:
+          `The preset for mobile devices ` +
+          `(drivers: ${_.join(getPresetDrivers(SUBCOMMAND_MOBILE), ',')}; plugins: ${DEFAULT_PLUGINS})`
+      },
+      {
+        command: SUBCOMMAND_BROWSER,
+        help:
+          `The preset for desktop browsers ` +
+          `(drivers: ${_.join(getPresetDrivers(SUBCOMMAND_BROWSER), ',')}; plugins: ${DEFAULT_PLUGINS})`
+      },
+      {
+        command: SUBCOMMAND_DESKTOP,
+        help:
+          `The preset for desktop applications ` +
+          `(drivers: ${_.join(getPresetDrivers(SUBCOMMAND_DESKTOP), ',')}; plugins: ${DEFAULT_PLUGINS})`
+      },
+      {
+        command: SUBCOMMAND_RESET,
+        help: 'Remove all installed drivers and plugins'
+      },
+    ];
+
+    for (const {command, help} of parserSpecs) {
+      const parser = extSubParsers.add_parser(command, {help});
+      ArgParser._patchExit(parser);
     }
   }
 }

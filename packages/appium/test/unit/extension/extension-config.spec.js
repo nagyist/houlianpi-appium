@@ -3,8 +3,7 @@ import path from 'path';
 import {version as APPIUM_VER} from '../../../package.json';
 import {FAKE_DRIVER_DIR, PROJECT_ROOT, rewiremock} from '../../helpers';
 import {initMocks} from './mocks';
-
-const {expect} = chai;
+import {resolveEsmEntryPoint} from '../../../lib/extension/extension-config';
 
 describe('ExtensionConfig', function () {
   /** @type {import('sinon').SinonSandbox} */
@@ -18,6 +17,16 @@ describe('ExtensionConfig', function () {
 
   /** @type {import('./mocks').MockAppiumSupport} */
   let MockAppiumSupport;
+
+  let expect;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+  });
 
   beforeEach(function () {
     let overrides;
@@ -37,7 +46,31 @@ describe('ExtensionConfig', function () {
     process.removeAllListeners('exit');
   });
 
-  describe('constructor', function () {});
+  describe('ESM module resolution', function () {
+    it('resolves ESM entry point with simple export', function () {
+      resolveEsmEntryPoint('./index.js').should.eql('./index.js');
+    });
+
+    it('resolves ESM entry point with dot export', function () {
+      resolveEsmEntryPoint({
+        '.': './index.js'
+      }).should.eql('./index.js');
+    });
+
+    it('resolves ESM entry point with import export', function () {
+      resolveEsmEntryPoint({
+        import: './index.js'
+      }).should.eql('./index.js');
+    });
+
+    it('resolves ESM entry point with complex import export', function () {
+      resolveEsmEntryPoint({
+        '.': {
+          import: './index.js'
+        }
+      }).should.eql('./index.js');
+    });
+  });
 
   describe('instance method', function () {
     /** @type {import('appium/lib/extension/extension-config').ExtensionConfig<DriverType>} */
@@ -239,7 +272,7 @@ describe('ExtensionConfig', function () {
             await expect(
               config.getGenericConfigWarnings(extData, extData.pkgName)
             ).to.eventually.eql([
-              `Driver "${extData.pkgName}" (package \`${extData.pkgName}\`) may be incompatible with the current version of Appium (v${APPIUM_VER}) due to its peer dependency on older Appium v${extData.appiumVersion}. Please upgrade \`${extData.pkgName}\` to v${updateVersion} or newer.`,
+              `Driver "${extData.pkgName}" (package \`${extData.pkgName}\`) may be incompatible with the current version of Appium (v${APPIUM_VER}) due to its peer dependency on Appium ${extData.appiumVersion}. Try to upgrade \`${extData.pkgName}\` to v${updateVersion} or newer.`,
             ]);
           });
         });
@@ -254,7 +287,7 @@ describe('ExtensionConfig', function () {
             await expect(
               config.getGenericConfigWarnings(extData, extData.pkgName)
             ).to.eventually.eql([
-              `Driver "${extData.pkgName}" (package \`${extData.pkgName}\`) may be incompatible with the current version of Appium (v${APPIUM_VER}) due to its peer dependency on older Appium v${extData.appiumVersion}. Please ask the developer of \`${extData.pkgName}\` to update the peer dependency on Appium to v${APPIUM_VER}.`,
+              `Driver "${extData.pkgName}" (package \`${extData.pkgName}\`) may be incompatible with the current version of Appium (v${APPIUM_VER}) due to its peer dependency on Appium ${extData.appiumVersion}. Please install a compatible version of the driver.`,
             ]);
           });
         });
@@ -270,9 +303,9 @@ describe('ExtensionConfig', function () {
 
         it('should display a warning count of 1', async function () {
           await config._validate({foo: {}});
-          expect(MockAppiumSupport.logger.__logger.warn).to.be.calledWith(
+          MockAppiumSupport.logger.__logger.warn.calledWith(
             'Appium encountered 1 warning while validating drivers found in manifest /some/path/extensions.yaml'
-          );
+          ).should.be.true;
         });
       });
 
@@ -284,9 +317,9 @@ describe('ExtensionConfig', function () {
 
         it('should display an error count of 1', async function () {
           await config._validate({foo: {}});
-          expect(MockAppiumSupport.logger.__logger.error).to.be.calledWith(
+          MockAppiumSupport.logger.__logger.error.calledWith(
             'Appium encountered 1 error while validating drivers found in manifest /some/path/extensions.yaml'
-          );
+          ).should.be.true;
         });
       });
     });
@@ -300,11 +333,8 @@ describe('ExtensionConfig', function () {
       });
 
       describe('when the extension is not actually installed', function () {
-        it('should throw', function () {
-          expect(() => config.require('fake')).to.throw(
-            ReferenceError,
-            /^could not find a driver installed at \/some\/path\/node_modules\/flotsam/i
-          );
+        it('should throw', async function () {
+          await config.requireAsync('fake').should.be.rejectedWith(/cannot find module/i);
         });
       });
 
@@ -315,11 +345,8 @@ describe('ExtensionConfig', function () {
           // ()`config.appiumHome` is stubbed already, so we can't just run `getInstallPath` as-is)
           sandbox.stub(config, 'getInstallPath').returns(FAKE_DRIVER_DIR);
         });
-        it('should throw', function () {
-          expect(() => config.require('fake')).to.throw(
-            ReferenceError,
-            /could not find a class named "Jetsam" exported by driver "fake"/i
-          );
+        it('should throw', async function () {
+          await config.requireAsync('fake').should.be.rejectedWith(/cannot find module/i);
         });
       });
 
@@ -333,8 +360,8 @@ describe('ExtensionConfig', function () {
             .returns(path.join(PROJECT_ROOT, 'packages', 'relaxed-caps-plugin'));
         });
 
-        it('should return the class', function () {
-          expect(config.require('relaxed-caps')).to.equal(
+        it('should return the class', async function () {
+          expect(await config.requireAsync('relaxed-caps')).to.equal(
             require('@appium/relaxed-caps-plugin').RelaxedCapsPlugin
           );
         });

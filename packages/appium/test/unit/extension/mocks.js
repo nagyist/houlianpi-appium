@@ -1,4 +1,4 @@
-/* eslint-disable require-await */
+
 // @ts-check
 
 /**
@@ -7,6 +7,7 @@
 
 import {EventEmitter} from 'events';
 import path from 'path';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {version as APPIUM_VER} from '../../../package.json';
 
@@ -26,6 +27,7 @@ export function initMocks(sandbox = createSandbox()) {
             .returns({next: sandbox.stub().resolves({done: true})}),
         })
       ),
+      glob: /** @type {MockAppiumSupportFs['glob']} */ (sandbox.stub().resolves([])),
       mkdirp: /** @type {MockAppiumSupportFs['mkdirp']} */ (sandbox.stub().resolves()),
       readPackageJsonFrom: /** @type {MockAppiumSupportFs['readPackageJsonFrom']} */ (
         sandbox.stub().returns({version: APPIUM_VER, engines: {node: '>=12'}})
@@ -33,6 +35,7 @@ export function initMocks(sandbox = createSandbox()) {
       findRoot: /** @type {MockAppiumSupportFs['findRoot']} */ (
         sandbox.stub().returns(path.join(__dirname, '..', '..', '..'))
       ),
+      exists: /** @type {MockAppiumSupportFs['exists']} */ (sandbox.stub().resolves(true)),
     },
     env: {
       resolveAppiumHome: /** @type {MockAppiumSupportEnv['resolveAppiumHome']} */ (
@@ -166,9 +169,11 @@ export function initMocks(sandbox = createSandbox()) {
  * @property {SinonStubbedMember<SupportFs['readFile']>} readFile
  * @property {SinonStubbedMember<SupportFs['writeFile']>} writeFile
  * @property {SinonStubbedMember<SupportFs['walk']>} walk
+ * @property {SinonStubbedMember<SupportFs['glob']>} glob
  * @property {SinonStubbedMember<SupportFs['mkdirp']>} mkdirp
  * @property {SinonStubbedMember<SupportFs['readPackageJsonFrom']>} readPackageJsonFrom
  * @property {SinonStubbedMember<SupportFs['findRoot']>} findRoot
+ * @property {SinonStubbedMember<SupportFs['exists']>} exists
  */
 
 /**

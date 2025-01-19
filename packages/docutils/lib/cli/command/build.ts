@@ -1,99 +1,73 @@
-import {CommandModule, InferredOptionTypes, Options} from 'yargs';
-import {buildReferenceDocs, buildSite, deploy, updateNav} from '../../builder';
+/**
+ * Yargs command module for the `build` command.
+ * @module
+ */
+
+import path from 'node:path';
+import type {CommandModule, InferredOptionTypes, Options} from 'yargs';
+import {buildSite, deploy} from '../../builder';
 import {NAME_BIN} from '../../constants';
-import logger from '../../logger';
+import {getLogger} from '../../logger';
 import {stopwatch} from '../../util';
+import {checkMissingPaths} from '../check';
 
-const log = logger.withTag('build');
+const log = getLogger('build');
 
-const NAME_GROUP_BUILD = 'Build Options:';
-const NAME_GROUP_DEPLOY = 'Deployment Options:';
-const NAME_GROUP_SERVE = 'Serve Options:';
-const NAME_GROUP_BUILD_PATHS = 'Paths:';
+enum BuildCommandGroup {
+  Build = 'Build Config:',
+  Deploy = 'Deployment Config:',
+  Serve = 'Dev Server Config:',
+  BuildPaths = 'Custom Paths:',
+}
 
-const opts = Object.freeze({
-  reference: {
-    describe: 'Run TypeDoc command API reference build (Markdown)',
-    group: NAME_GROUP_BUILD,
-    type: 'boolean',
-    default: true,
-  },
+const opts = {
   site: {
     describe: 'Run MkDocs build (HTML)',
-    group: NAME_GROUP_BUILD,
+    group: BuildCommandGroup.Build,
     type: 'boolean',
     default: true,
   },
   'site-dir': {
     alias: 'd',
     describe: 'HTML output directory',
-    group: NAME_GROUP_BUILD_PATHS,
+    group: BuildCommandGroup.Build,
     nargs: 1,
     requiresArg: true,
     type: 'string',
     normalize: true,
+    coerce: path.resolve,
     implies: 'site',
     defaultDescription: '(from mkdocs.yml)',
   },
   'package-json': {
     defaultDescription: './package.json',
     describe: 'Path to package.json',
-    group: NAME_GROUP_BUILD_PATHS,
+    group: BuildCommandGroup.BuildPaths,
     nargs: 1,
     normalize: true,
-    requiresArg: true,
-    type: 'string',
-  },
-  title: {
-    defaultDescription: '(extension package name)',
-    describe: 'Title of the API reference',
-    group: NAME_GROUP_BUILD,
-    nargs: 1,
-    requiresArg: true,
-    type: 'string',
-  },
-  'tsconfig-json': {
-    defaultDescription: './tsconfig.json',
-    describe: 'Path to tsconfig.json',
-    group: NAME_GROUP_BUILD_PATHS,
-    nargs: 1,
-    normalize: true,
+    coerce: path.resolve,
     requiresArg: true,
     type: 'string',
   },
   'mkdocs-yml': {
     defaultDescription: './mkdocs.yml',
     description: 'Path to mkdocs.yml',
-    group: NAME_GROUP_BUILD_PATHS,
+    group: BuildCommandGroup.BuildPaths,
     nargs: 1,
     normalize: true,
     requiresArg: true,
+    coerce: path.resolve,
     type: 'string',
-  },
-  'typedoc-json': {
-    defaultDescription: './typedoc.json',
-    describe: 'Path to typedoc.json',
-    group: NAME_GROUP_BUILD_PATHS,
-    nargs: 1,
-    normalize: true,
-    requiresArg: true,
-    type: 'string',
-  },
-  all: {
-    describe: 'Output all reference docs (not just Appium comands)',
-    group: NAME_GROUP_BUILD,
-    implies: 'site',
-    type: 'boolean',
   },
   deploy: {
-    describe: 'Commit HTML output',
-    group: NAME_GROUP_DEPLOY,
+    describe: 'Commit HTML output to a branch using mike',
+    group: BuildCommandGroup.Deploy,
     type: 'boolean',
     implies: 'site',
   },
   push: {
     describe: 'Push after deploy',
-    group: NAME_GROUP_DEPLOY,
+    group: BuildCommandGroup.Deploy,
     type: 'boolean',
     implies: 'deploy',
   },
@@ -101,7 +75,7 @@ const opts = Object.freeze({
     alias: 'b',
     describe: 'Branch to commit to',
     implies: 'deploy',
-    group: NAME_GROUP_DEPLOY,
+    group: BuildCommandGroup.Deploy,
     type: 'string',
     requiresArg: true,
     nargs: 1,
@@ -110,26 +84,26 @@ const opts = Object.freeze({
   remote: {
     alias: 'r',
     describe: 'Remote to push to',
-    implies: ['deploy', 'push'],
-    group: NAME_GROUP_DEPLOY,
+    implies: 'push',
+    group: BuildCommandGroup.Deploy,
     type: 'string',
     requiresArg: true,
     nargs: 1,
     defaultDescription: 'origin',
   },
-  prefix: {
+  'deploy-prefix': {
     describe: 'Subdirectory within <branch> to commit to',
-    implies: ['deploy', 'branch'],
-    group: NAME_GROUP_DEPLOY,
+    implies: 'branch',
+    group: BuildCommandGroup.Deploy,
     type: 'string',
     nargs: 1,
     requiresArg: true,
   },
   message: {
     alias: 'm',
-    describe: 'Commit message',
+    describe: 'Commit message. Use "%s" for version placeholder',
     implies: 'deploy',
-    group: NAME_GROUP_DEPLOY,
+    group: BuildCommandGroup.Deploy,
     type: 'string',
     nargs: 1,
     requiresArg: true,
@@ -137,7 +111,7 @@ const opts = Object.freeze({
   'deploy-version': {
     describe: 'Version (directory) to deploy build to',
     implies: 'deploy',
-    group: NAME_GROUP_DEPLOY,
+    group: BuildCommandGroup.Deploy,
     type: 'string',
     nargs: 1,
     requiresArg: true,
@@ -146,27 +120,31 @@ const opts = Object.freeze({
   alias: {
     describe: 'Alias for the build (e.g., "latest"); triggers alias update',
     implies: 'deploy',
-    group: NAME_GROUP_DEPLOY,
+    group: BuildCommandGroup.Deploy,
     type: 'string',
     nargs: 1,
     requiresArg: true,
     defaultDescription: 'latest',
   },
-  rebase: {
-    describe: 'Rebase <branch> with remote before deploy',
-    implies: ['deploy', 'branch', 'remote'],
-    group: NAME_GROUP_DEPLOY,
-    type: 'boolean',
+  'alias-type': {
+    describe: 'Alias creation strategy',
+    implies: 'deploy',
+    group: BuildCommandGroup.Deploy,
+    type: 'string',
+    nargs: 1,
+    requiresArg: true,
+    choices: ['symlink', 'redirect', 'copy'],
+    defaultDescription: 'redirect',
   },
   serve: {
     describe: 'Start development server',
-    group: NAME_GROUP_SERVE,
+    group: BuildCommandGroup.Serve,
     type: 'boolean',
   },
   port: {
     alias: 'p',
     describe: 'Development server port',
-    group: NAME_GROUP_SERVE,
+    group: BuildCommandGroup.Serve,
     type: 'number',
     defaultDescription: '8000',
     implies: 'serve',
@@ -176,45 +154,40 @@ const opts = Object.freeze({
   host: {
     alias: 'h',
     describe: 'Development server host',
-    group: NAME_GROUP_SERVE,
+    group: BuildCommandGroup.Serve,
     type: 'string',
     nargs: 1,
     requiresArg: true,
     implies: 'serve',
     defaultDescription: 'localhost',
   },
-}) satisfies Record<string, Options>;
+} as const satisfies Record<string, Options>;
 
 type BuildOptions = InferredOptionTypes<typeof opts>;
 
 export default {
   command: 'build',
-  describe: 'Build Appium extension documentation',
-  builder: (yargs) =>
-    yargs.options(opts).check((argv) => {
-      // either this method doesn't provide camel-cased props, or the types are wrong.
-      if (argv.deploy === true && argv['site-dir']) {
-        log.error(
-          `--site-dir is unsupported when running "${NAME_BIN} deploy"; use --prefix if needd, but remember that the default behavior is to deploy to the root of the branch (${argv.branch}) instead of a subdirectory`
-        );
-        return false;
-      }
-      return true;
-    }),
+  describe: 'Build Appium extension documentation using MkDocs',
+  builder(yargs) {
+    return yargs
+      .options(opts)
+      .check(async (argv) => {
+        // either this method doesn't provide camel-cased props, or the types are wrong.
+        if (argv.deploy === true && argv['site-dir']) {
+          return `--site-dir is unsupported when running "${NAME_BIN} deploy"; use --deploy-prefix if needed, but remember that the default behavior is to deploy to the root of the branch (${argv.branch}) instead of a subdirectory`;
+        }
+
+        return await checkMissingPaths(opts, BuildCommandGroup.BuildPaths, argv);
+      })
+      .epilog(
+        'For help with further configuration, see:\n  - MkDocs: https://www.mkdocs.org\n  - Mike: https://github.com/jimporter/mike',
+      );
+  },
   async handler(args) {
+    log.info('Building docs...');
     const stop = stopwatch('build');
     log.debug('Build command called with args: %O', args);
-    if (!args.site && !args.reference) {
-      // specifically not a DocUtils error
-      throw new Error(
-        'Cannot use both --no-site (--site=false) and --no-reference (--reference=false)'
-      );
-    }
-    if (args.reference) {
-      await buildReferenceDocs(args);
-    }
     if (args.site) {
-      await updateNav(args);
       if (args.deploy) {
         await deploy(args);
       } else {
@@ -223,4 +196,4 @@ export default {
     }
     log.success('Done! (total: %dms)', stop());
   },
-} as CommandModule<{}, BuildOptions>;
+} as CommandModule<object, BuildOptions>;

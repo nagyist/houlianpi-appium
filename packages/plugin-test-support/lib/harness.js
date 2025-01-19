@@ -2,6 +2,7 @@
 import {fs} from 'appium/support';
 import {main as appiumServer} from 'appium';
 import getPort from 'get-port';
+// eslint-disable-next-line import/named
 import {info, success, warning} from 'log-symbols';
 import {exec} from 'teen_process';
 
@@ -35,7 +36,13 @@ export function pluginE2EHarness(opts) {
    */
   let server;
 
+  // eslint-disable-next-line mocha/no-top-level-hooks
   before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+
     const setupAppiumHome = async () => {
       /**
        * @type {AppiumEnv}
@@ -111,7 +118,7 @@ export function pluginE2EHarness(opts) {
       console.log(`${info} Will use port ${port} for Appium server`);
       this.port = port;
 
-      /** @type {import('appium').Args} */
+      /** @type {import('appium/types').Args} */
       const args = {
         port,
         address: host,
@@ -129,6 +136,7 @@ export function pluginE2EHarness(opts) {
     await createServer();
   });
 
+  // eslint-disable-next-line mocha/no-top-level-hooks
   after(async function () {
     if (server) {
       await server.close();
@@ -141,7 +149,7 @@ export function pluginE2EHarness(opts) {
  * @property {string} [appiumHome] - Path to Appium home directory
  * @property {Mocha.before} before - Mocha "before all" hook function
  * @property {Mocha.after} after - Mocha "after all" hook function
- * @property {Partial<import('appium').Args>} [serverArgs] - Arguments to pass to Appium server
+ * @property {Partial<import('appium/types').Args>} [serverArgs] - Arguments to pass to Appium server
  * @property {import('appium/types').InstallType & string} driverSource - Source of driver to install
  * @property {string} [driverPackage] - Package name of driver to install
  * @property {string} driverName - Name of driver to install

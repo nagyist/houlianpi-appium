@@ -1,5 +1,6 @@
-import {fs, tempDir} from '../../lib/index.js';
+import {fs, system, tempDir} from '../../lib';
 import path from 'path';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {exec} from 'teen_process';
 import _ from 'lodash';
@@ -9,9 +10,18 @@ import _ from 'lodash';
 const MOCHA_TIMEOUT = 10000;
 
 describe('fs', function () {
+  let chai;
+
   this.timeout(MOCHA_TIMEOUT);
 
   const existingPath = __filename;
+
+  before(async function () {
+    chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
 
   let sandbox;
   beforeEach(function () {
@@ -65,8 +75,6 @@ describe('fs', function () {
       await fs.copyFile(existingPath, newPath);
       (await fs.readFile(newPath, 'utf8')).should.contain('readFile');
     });
-
-    it('should be able to copy a directory');
 
     it('should throw an error if the source does not exist', async function () {
       await fs.copyFile('/sdfsdfsdfsdf', '/tmp/bla').should.eventually.be.rejected;
@@ -140,6 +148,11 @@ describe('fs', function () {
     stat.should.have.property('atime');
   });
   describe('which()', function () {
+    before(function () {
+      if (system.isWindows()) {
+        return this.skip();
+      }
+    });
     it('should find correct executable', async function () {
       let systemNpmPath = (await exec('which', ['npm'])).stdout.trim();
       let npmPath = await fs.which('npm');
@@ -158,8 +171,9 @@ describe('fs', function () {
 
   describe('walkDir()', function () {
     it('walkDir recursive', async function () {
-      await chai.expect(fs.walkDir(__dirname, true, (item) => item.endsWith('logger/helpers.js')))
-        .to.eventually.not.be.null;
+      await chai.expect(
+        fs.walkDir(__dirname, true, (item) => item.endsWith(`logger${path.sep}helpers.js`))
+      ).to.eventually.not.be.null;
     });
     it('should walk all elements recursive', async function () {
       await chai.expect(fs.walkDir(path.join(__dirname, '..', 'e2e', 'fixture'), true, _.noop)).to
@@ -169,7 +183,7 @@ describe('fs', function () {
       const err = new Error('Callback error');
       const stub = sandbox.stub().rejects(err);
       await fs.walkDir(__dirname, true, stub).should.eventually.be.rejectedWith(err);
-      stub.should.have.been.calledOnce;
+      stub.calledOnce.should.be.true;
     });
     it('should traverse non-recursively', async function () {
       const filePath = await fs.walkDir(__dirname, false, (item) =>

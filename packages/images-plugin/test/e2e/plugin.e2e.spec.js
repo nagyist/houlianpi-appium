@@ -1,8 +1,11 @@
+import _ from 'lodash';
 import path from 'path';
 import {remote as wdio} from 'webdriverio';
-import {MATCH_FEATURES_MODE, GET_SIMILARITY_MODE} from '../../lib/compare';
+import {MATCH_FEATURES_MODE, GET_SIMILARITY_MODE} from '../../lib/constants';
 import {TEST_IMG_1_B64, TEST_IMG_2_B64, APPSTORE_IMG_PATH} from '../fixtures';
 import {pluginE2EHarness} from '@appium/plugin-test-support';
+import {tempDir, fs} from '@appium/support';
+import sharp from 'sharp';
 
 const THIS_PLUGIN_DIR = path.join(__dirname, '..', '..');
 const APPIUM_HOME = path.join(THIS_PLUGIN_DIR, 'local_appium_home');
@@ -32,11 +35,14 @@ const WDIO_OPTS = {
 };
 
 describe('ImageElementPlugin', function () {
-  let server,
-    driver = null;
+  let server;
+  let driver;
 
-  // this hook is intended to be run before the hooks created by `e2eSetup`
-  after(async function () {
+  beforeEach(async function () {
+    driver = await wdio(WDIO_OPTS);
+  });
+
+  afterEach(async function () {
     if (driver) {
       await driver.deleteSession();
     }
@@ -58,7 +64,6 @@ describe('ImageElementPlugin', function () {
   });
 
   it('should add the compareImages route', async function () {
-    driver = await wdio(WDIO_OPTS);
     let comparison = await driver.compareImages(
       MATCH_FEATURES_MODE,
       TEST_IMG_1_B64,
@@ -84,5 +89,30 @@ describe('ImageElementPlugin', function () {
     width.should.eql(80);
     height.should.eql(91);
     await imageEl.click();
+  });
+
+  it('should find subelements', async function () {
+    const imageEl = await driver.$(APPSTORE_IMG_PATH);
+    const {width, height} = await imageEl.getSize();
+    const tmpRoot = await tempDir.openDir();
+    try {
+      const screenshotPath = path.join(tmpRoot, 'element.png');
+      await imageEl.saveScreenshot(screenshotPath);
+      const tmpImgPath = path.join(tmpRoot, 'region.png');
+      await sharp(screenshotPath)
+      .extract(
+        {
+          left: parseInt(width / 4, 10),
+          top: parseInt(height / 4, 10),
+          width: parseInt(width / 2, 10),
+          height: parseInt(height / 2, 10),
+        }
+      )
+      .toFile(tmpImgPath);
+      const subEl = await imageEl.$(tmpImgPath);
+      _.isNil(subEl).should.be.false;
+    } finally {
+      await fs.rimraf(tmpRoot);
+    }
   });
 });

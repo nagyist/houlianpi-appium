@@ -5,15 +5,26 @@ import {
   removeAppiumPrefixes,
   inspect,
   adjustNodePath,
+  fetchInterfaces,
 } from '../../lib/utils';
 import {BASE_CAPS, W3C_CAPS} from '../helpers';
 import _ from 'lodash';
 import {stripColors} from '@colors/colors';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import logger from '../../lib/logger';
 import {fs} from '@appium/support';
 
 describe('utils', function () {
+  let should;
+
+  beforeEach(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+  });
+
   describe('parseCapsForInnerDriver()', function () {
     it('should return an error if only JSONWP provided', function () {
       let {error, protocol} = parseCapsForInnerDriver(BASE_CAPS);
@@ -81,12 +92,10 @@ describe('utils', function () {
           'appium:foo2': 'bar2',
         }
       );
-      res.error.should.eql({
-        jsonwpCode: 61,
-        error: 'invalid argument',
-        w3cStatus: 400,
-        _stacktrace: null,
-      });
+      res.error.jsonwpCode.should.eql(61);
+      res.error.error.should.eql('invalid argument');
+      res.error.w3cStatus.should.eql(400);
+      _.isNull(res.error._stacktrace).should.be.true;
     });
     it('should reject if W3C caps are not passing constraints', function () {
       const err = parseCapsForInnerDriver(undefined, W3C_CAPS, {
@@ -100,14 +109,13 @@ describe('utils', function () {
         ...W3C_CAPS,
         firstMatch: [{foo: 'bar'}, {'appium:hello': 'world'}],
       };
-      parseCapsForInnerDriver(BASE_CAPS, w3cCaps, {
+      const error = parseCapsForInnerDriver(BASE_CAPS, w3cCaps, {
         hello: {presence: true},
-      }).error.should.eql({
-        jsonwpCode: 61,
-        error: 'invalid argument',
-        w3cStatus: 400,
-        _stacktrace: null,
-      });
+      }).error;
+      error.jsonwpCode.should.eql(61);
+      error.error.should.eql('invalid argument');
+      error.w3cStatus.should.eql(400);
+      _.isNull(error._stacktrace).should.be.true;
     });
     it('should add appium prefixes to W3C caps that are not standard in W3C', function () {
       parseCapsForInnerDriver(undefined, {
@@ -231,6 +239,26 @@ describe('utils', function () {
       settings.should.eql({});
       caps.should.eql({});
     });
+    it('should pull combined settings', function () {
+      const caps = {
+        platformName: 'foo',
+        browserName: 'bar',
+        'appium:settings[foo]': 'baz2',
+        'appium:settings': {
+          foo: 'baz',
+          yolo: 'bar',
+        },
+      };
+      const settings = pullSettings(caps);
+      settings.should.eql({
+        foo: 'baz2',
+        yolo: 'bar',
+      });
+      caps.should.eql({
+        platformName: 'foo',
+        browserName: 'bar',
+      });
+    });
   });
 
   describe('inspect()', function () {
@@ -275,4 +303,19 @@ describe('utils', function () {
       (await fs.exists(process.env.NODE_PATH)).should.be.true;
     });
   });
+
+  describe('fetchInterfaces()', function () {
+    it('should fetch interfaces for ipv4 only', async function () {
+      fetchInterfaces(4).length.should.be.greaterThan(0);
+    });
+
+    it('should fetch interfaces for ipv6 only', async function () {
+      fetchInterfaces(6).length.should.be.greaterThan(0);
+    });
+
+    it('should fetch interfaces for ipv4 and ipv6', async function () {
+      fetchInterfaces().length.should.be.greaterThan(0);
+    });
+  });
+
 });

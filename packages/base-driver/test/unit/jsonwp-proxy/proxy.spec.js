@@ -17,7 +17,7 @@ function buildReqRes(url, method, body) {
   res.send = (body) => {
     try {
       body = JSON.parse(body);
-    } catch (e) {}
+    } catch {}
     res.sentBody = body;
   };
   return [req, res];
@@ -25,6 +25,15 @@ function buildReqRes(url, method, body) {
 
 describe('proxy', function () {
   let port;
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+    port = await getTestPort();
+  });
 
   function mockProxy(opts = {}) {
     // sets default server/port
@@ -35,10 +44,6 @@ describe('proxy', function () {
     };
     return proxy;
   }
-
-  before(async function () {
-    port = await getTestPort();
-  });
 
   it('should override default params', function () {
     let j = mockProxy({server: '127.0.0.2', port});

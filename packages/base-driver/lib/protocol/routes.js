@@ -3,6 +3,7 @@
 import _ from 'lodash';
 import {util} from '@appium/support';
 import {PROTOCOLS, DEFAULT_BASE_PATH} from '../constants';
+import {match} from 'path-to-regexp';
 
 const SET_ALERT_TEXT_PAYLOAD_PARAMS = {
   validate: (jsonObj) =>
@@ -18,8 +19,9 @@ const SET_ALERT_TEXT_PAYLOAD_PARAMS = {
  * define the routes, mapping of HTTP methods to particular driver commands, and
  * any parameters that are expected in a request parameters can be `required` or
  * `optional`
+ * @satisfies {import('@appium/types').MethodMap<import('../basedriver/driver').BaseDriver>}
  */
-const METHOD_MAP = /** @type {const} */ ({
+export const METHOD_MAP = /** @type {const} */ ({
   '/status': {
     GET: {command: 'getStatus'},
   },
@@ -129,7 +131,11 @@ const METHOD_MAP = /** @type {const} */ ({
     POST: {command: 'deactivateIMEEngine', deprecated: true},
   },
   '/session/:sessionId/ime/activate': {
-    POST: {command: 'activateIMEEngine', payloadParams: {required: ['engine']}, deprecated: true},
+    POST: {
+      command: 'activateIMEEngine',
+      payloadParams: {required: ['engine']},
+      deprecated: true,
+    },
   },
   '/session/:sessionId/frame': {
     POST: {command: 'setFrame', payloadParams: {required: ['id']}},
@@ -356,7 +362,11 @@ const METHOD_MAP = /** @type {const} */ ({
     DELETE: {command: 'releaseActions'},
   },
   '/session/:sessionId/touch/longclick': {
-    POST: {command: 'touchLongClick', payloadParams: {required: ['elements']}, deprecated: true},
+    POST: {
+      command: 'touchLongClick',
+      payloadParams: {required: ['elements']},
+      deprecated: true,
+    },
   },
   '/session/:sessionId/touch/flick': {
     POST: {
@@ -556,16 +566,6 @@ const METHOD_MAP = /** @type {const} */ ({
     POST: {
       command: 'keyevent',
       payloadParams: {required: ['keycode'], optional: ['metastate']},
-      deprecated: true,
-    },
-  },
-  '/session/:sessionId/appium/device/rotate': {
-    POST: {
-      command: 'mobileRotation',
-      payloadParams: {
-        required: ['x', 'y', 'radius', 'rotation', 'touchCount', 'duration'],
-        optional: ['element'],
-      },
       deprecated: true,
     },
   },
@@ -824,7 +824,7 @@ const METHOD_MAP = /** @type {const} */ ({
     GET: {command: 'getWindowRect'},
     POST: {
       command: 'setWindowRect',
-      payloadParams: {required: ['x', 'y', 'width', 'height']},
+      payloadParams: {optional: ['x', 'y', 'width', 'height']},
     },
   },
   '/session/:sessionId/window/maximize': {
@@ -919,100 +919,48 @@ const METHOD_MAP = /** @type {const} */ ({
 });
 
 // driver command names
-let ALL_COMMANDS = [];
-for (let v of _.values(METHOD_MAP)) {
-  for (let m of _.values(v)) {
-    if (m.command) {
-      ALL_COMMANDS.push(m.command);
-    }
-  }
-}
-
-const RE_ESCAPE = /[-[\]{}()+?.,\\^$|#\s]/g;
-const RE_PARAM = /([:*])(\w+)/g;
-
-class Route {
-  constructor(route) {
-    this.paramNames = [];
-
-    let reStr = route.replace(RE_ESCAPE, '\\$&');
-    reStr = reStr.replace(RE_PARAM, (_, mode, name) => {
-      this.paramNames.push(name);
-      return mode === ':' ? '([^/]*)' : '(.*)';
-    });
-    this.routeRegexp = new RegExp(`^${reStr}$`);
-  }
-
-  parse(url) {
-    //if (url.indexOf('timeouts') !== -1 && this.routeRegexp.toString().indexOf('timeouts') !== -1) {
-    //debugger;
-    //}
-    let matches = url.match(this.routeRegexp);
-    if (!matches) return; // eslint-disable-line curly
-    let i = 0;
-    let params = {};
-    while (i < this.paramNames.length) {
-      const paramName = this.paramNames[i++];
-      params[paramName] = matches[i];
-    }
-    return params;
-  }
-}
+export const ALL_COMMANDS = _.flatMap(_.values(METHOD_MAP).map(_.values))
+  .filter((m) => Boolean(m.command))
+  .map((m) => m.command);
 
 /**
  *
  * @param {string} endpoint
  * @param {import('@appium/types').HTTPMethod} method
- * @param {string} [basePath]
+ * @param {string} [basePath=DEFAULT_BASE_PATH]
  * @returns {string|undefined}
  */
-function routeToCommandName(endpoint, method, basePath = DEFAULT_BASE_PATH) {
-  let dstRoute = null;
-
-  // remove any query string
-  // TODO: would this be better handled as a `URL` object?
-  if (endpoint.includes('?')) {
-    endpoint = endpoint.slice(0, endpoint.indexOf('?'));
+export function routeToCommandName(endpoint, method, basePath = DEFAULT_BASE_PATH) {
+  let normalizedEndpoint = basePath
+    ? endpoint.replace(new RegExp(`^${_.escapeRegExp(basePath)}`), '')
+    : endpoint;
+  normalizedEndpoint = `${_.startsWith(normalizedEndpoint, '/') ? '' : '/'}${normalizedEndpoint}`;
+  /** @type {string} */
+  let normalizedPathname;
+  try {
+    // we could use any prefix there as we anyway need to only extract the pathname
+    normalizedPathname = new URL(`https://appium.io${normalizedEndpoint}`).pathname;
+  } catch (err) {
+    throw new Error(`'${endpoint}' cannot be translated to a command name: ${err.message}`);
   }
 
-  const actualEndpoint =
-    endpoint === '/' ? '' : _.startsWith(endpoint, '/') ? endpoint : `/${endpoint}`;
-
-  for (let currentRoute of _.keys(METHOD_MAP)) {
-    const route = new Route(`${basePath}${currentRoute}`);
-    // we don't care about the actual session id for matching
-    if (
-      route.parse(`${basePath}/session/ignored-session-id${actualEndpoint}`) ||
-      route.parse(`${basePath}${actualEndpoint}`) ||
-      route.parse(actualEndpoint)
-    ) {
-      dstRoute = currentRoute;
-      break;
-    }
+  /** @type {string[]} */
+  const possiblePathnames = [];
+  if (!normalizedPathname.startsWith('/session/')) {
+    possiblePathnames.push(`/session/any-session-id${normalizedPathname}`);
   }
-  if (!dstRoute) return; // eslint-disable-line curly
-
-  const methods = METHOD_MAP[dstRoute];
-  method = /** @type {Uppercase<typeof method>} */ (_.toUpper(method));
-  if (method in methods) {
-    const dstMethod = _.get(methods, method);
-    if (dstMethod.command) {
-      return dstMethod.command;
+  possiblePathnames.push(normalizedPathname);
+  const normalizedMethod = _.toUpper(method);
+  for (const [routePath, routeSpec] of _.toPairs(METHOD_MAP)) {
+    const routeMatcher = match(routePath);
+    if (possiblePathnames.some((pp) => routeMatcher(pp))) {
+      const commandName = routeSpec?.[normalizedMethod]?.command;
+      if (commandName) {
+        return commandName;
+      }
     }
   }
 }
 
 // driver commands that do not require a session to already exist
-const NO_SESSION_ID_COMMANDS = ['createSession', 'getStatus', 'getSessions'];
-
-export {METHOD_MAP, ALL_COMMANDS, NO_SESSION_ID_COMMANDS, routeToCommandName};
-
-/**
- * This checks compat with the `MethodMap` interface.
- * @ignore
- */
-// eslint-disable-next-line no-unused-vars
-const _validMethodMap =
-  /** @type {import('@appium/types').MethodMap<import('@appium/types').ExternalDriver<import('@appium/types').BaseDriverCapConstraints>>} */ (
-    METHOD_MAP
-  );
+export const NO_SESSION_ID_COMMANDS = ['createSession', 'getStatus', 'getSessions'];

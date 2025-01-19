@@ -1,10 +1,10 @@
 import _ from 'lodash';
-import fs from './fs';
+import {fs} from './fs';
 import B from 'bluebird';
 import {toReadableSizeString} from './util';
 import log from './logger';
 import Ftp from 'jsftp';
-import Timer from './timing';
+import {Timer} from './timing';
 import axios from 'axios';
 import FormData from 'form-data';
 
@@ -70,7 +70,6 @@ async function uploadFileToHttp(
   }
   if (fileFieldName) {
     const form = new FormData();
-    form.append(fileFieldName, localFileStream);
     if (formFields) {
       let pairs = [];
       if (_.isArray(formFields)) {
@@ -84,6 +83,7 @@ async function uploadFileToHttp(
         }
       }
     }
+    form.append(fileFieldName, localFileStream); // AWS S3 POST upload requires this to be the last field
     requestOpts.headers = {
       ...(_.isPlainObject(headers) ? headers : {}),
       ...form.getHeaders(),
@@ -325,12 +325,12 @@ export {uploadFile, downloadFile};
 /**
  * Specific options for {@linkcode uploadFile} if the remote location uses the `http(s)` protocol
  * @typedef HttpUploadOptions
- * @property {Record<string,any>} headers - Additional request headers mapping
+ * @property {import('@appium/types').HTTPHeaders} [headers] - Additional request headers mapping
  * @property {import('axios').Method} [method='POST'] - The HTTP method used for file upload
  * @property {number} [timeout] - The actual request timeout in milliseconds; defaults to {@linkcode DEFAULT_TIMEOUT_MS}
  * @property {string} [fileFieldName='file'] - The name of the form field containing the file
  * content to be uploaded. Any falsy value make the request to use non-multipart upload
- * @property {Record<string,any>} [formFields] - The additional form fields
+ * @property {Record<string, any> | [string, any][]} [formFields] - The additional form fields
  * to be included into the upload request. This property is only considered if
  * `fileFieldName` is set
  */

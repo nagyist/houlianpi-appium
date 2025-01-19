@@ -1,9 +1,17 @@
 // @ts-check
 
-import BaseDriver from '../../../lib';
+import {BaseDriver} from '../../../lib';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 
 describe('timeout', function () {
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
+
   let driver = new BaseDriver();
   let implicitWaitSpy;
   let sandbox;

@@ -1,13 +1,16 @@
-import chaiWebdriverIOAsync from 'chai-webdriverio-async';
 import {initSession, deleteSession, W3C_PREFIXED_CAPS} from '../helpers';
 
 function generalTests() {
   describe('generic actions', function () {
     let driver;
+    let should;
 
     before(async function () {
+      const chai = await import('chai');
+      const chaiAsPromised = await import('chai-as-promised');
+      chai.use(chaiAsPromised.default);
+      should = chai.should();
       driver = await initSession(W3C_PREFIXED_CAPS);
-      chai.use(chaiWebdriverIOAsync(driver));
     });
 
     after(async function () {
@@ -131,7 +134,7 @@ function generalTests() {
     it('should throw an error if a required overload param is missing', async function () {
       await driver
         .executeScript('fake: addition', [{num3: 4}])
-        .should.be.rejectedWith(/Parameters were incorrect/);
+        .should.be.rejectedWith(/required parameters are missing/);
     });
 
     it('should throw an error if sending in wrong types of params', async function () {

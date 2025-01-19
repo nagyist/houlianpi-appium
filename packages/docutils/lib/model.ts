@@ -5,33 +5,13 @@
  */
 
 import type {Jsonify, JsonValue, TsConfigJson as TsConfigJsonBase} from 'type-fest';
-import type {TypeDocOptions} from 'typedoc';
 
 /**
  * A `tsconfig.json` file w/ `$schema` prop
- *
- * Due to some `unknown` types in {@linkcode type-fest.TsConfigJson}, we cannot use that type
- * directly and need to use `Jsonify`.
- *
  */
-export type TsConfigJson = Jsonify<
-  TsConfigJsonBase & {
-    $schema?: string;
-  }
->;
-
-/**
- * A `typedoc.json` file w/ `$schema` and `extends` props
- *
- * TypeDoc doesn't recognize `$schema` and ignores it; its own config parser expands the value of
- * `extends` before it reaches its `Options` class. This is why we cannot use `TypeDocOptions` directly.
- */
-export type TypeDocJson = Jsonify<
-  Partial<TypeDocOptions> & {
-    $schema?: string;
-    extends?: string;
-  }
->;
+export type TsConfigJson = TsConfigJsonBase & {
+  $schema?: string;
+};
 
 /**
  * The `nav` prop of an `mkdocs.yml` file

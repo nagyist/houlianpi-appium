@@ -36,10 +36,8 @@ Appium extension authors--or anyone else--may use this config as well.
 
 - `config:js-app` - everything gets pinned except peer deps (plus a bunch of other reasonable defaults)
 - `group:definitelyTyped` - Groups all `@types/*` packages into one PR
-- `helpers:pinGitHubActionDigests` - Pins SHAs of GitHub Actions
 - `workarounds:typesNodeVersioning` - `@types/node` tracks Node.js versions instead
-- `:automergePatch` - Automatically merges "patch" and "pin" updates (assuming they pass CI)
-- `:automergeMinor` - Automatically merges "minor" updates (assuming they pass CI)
+- `:automergeStableNonMajor` - Automatically merges "patch" and "minor" updates for semver stable (>=1.0.0) packages (assuming they pass CI)
 - `:automergeDigest` - Automatically merges "digest" updates (assuming they pass CI)
 - `:enableVulnerabilityAlerts` - For "security" purposes
 - `:rebaseStalePrs` - Renovate will automatically rebase its PRs
@@ -50,7 +48,7 @@ Appium extension authors--or anyone else--may use this config as well.
 
 - Do not upgrade to major versions of packages which have become ESM-only.  Unfortunately this is an explicit deny-list.
 - Groups (groups updates into single PR):
-  - ESLint-related and [@appium/eslint-config-appium](https://github.com/appium/appium/tree/master/eslint-config-appium)
+  - ESLint-related and [@appium/eslint-config-appium-ts](https://github.com/appium/appium/tree/master/eslint-config-appium-ts)
   - [teen_process](https://github.com/appium/node-teen_process) and its DT types
   - Appium-scoped (`@appium`) packages. This applies to _other_ repos which depend on Appium, such as official drivers.
 
@@ -59,7 +57,6 @@ Appium extension authors--or anyone else--may use this config as well.
 ### Additional Config
 
 - Uses the parent directory for the commit scope if applicable; otherwise uses `deps`. The parent directory is _typically_ only applicable in monorepos.
-- Attempts transititive remediation of vulns
 
 ## License
 

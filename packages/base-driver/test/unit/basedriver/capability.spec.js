@@ -3,6 +3,7 @@
 import B from 'bluebird';
 import {BaseDriver, errors} from '../../../lib/index';
 import {validator} from '../../../lib/basedriver/desired-caps';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 
 // TODO: we need module-level mocks for the logger
@@ -11,12 +12,24 @@ describe('Desired Capabilities', function () {
   /** @type {BaseDriver} */
   let d;
   let sandbox;
+  /** @type {import('sinon').SinonSpy} */
+  let logWarnSpy;
+  /** @type {import('sinon').SinonStub} */
+  let deprecatedStub;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
+
 
   beforeEach(function () {
     d = new BaseDriver();
     sandbox = createSandbox();
-    sandbox.spy(d.log, 'warn');
-    sandbox.stub(validator.validators, 'deprecated');
+    logWarnSpy = sandbox.spy(d.log, 'warn');
+    deprecatedStub = sandbox.stub(validator.validators, 'deprecated');
   });
 
   afterEach(function () {
@@ -36,18 +49,15 @@ describe('Desired Capabilities', function () {
   it('should require platformName', async function () {
     await d
       .createSession({
-        alwaysMatch: {
-          'appium:deviceName': 'Delorean',
-        },
+        alwaysMatch: {},
         firstMatch: [{}],
       })
       .should.be.rejectedWith(errors.SessionNotCreatedError, /platformName/);
   });
 
   it('should not care about cap order', async function () {
-    await d.createSession(null, null, {
+    await d.createSession({
       alwaysMatch: {
-        'appium:deviceName': 'Delorean',
         platformName: 'iOS',
       },
       firstMatch: [{}],
@@ -67,10 +77,9 @@ describe('Desired Capabilities', function () {
     };
 
     await d
-      .createSession(null, null, {
+      .createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
         },
         firstMatch: [{}],
       })
@@ -90,7 +99,7 @@ describe('Desired Capabilities', function () {
     });
 
     await d
-      .createSession(null, null, {
+      .createSession({
         alwaysMatch: {
           'appium:necessary': 'yup',
         },
@@ -100,44 +109,37 @@ describe('Desired Capabilities', function () {
   });
 
   it('should accept extra capabilities', async function () {
-    await d.createSession(
-      null,
-      null,
-      /** @type {import('@appium/types').W3CCapabilities<{'hold the':string}>} */ ({
-        alwaysMatch: {
-          platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
-          'appium:extra': 'cheese',
-          'appium:hold the': 'sauce',
-        },
-        firstMatch: [{}],
-      })
-    ).should.be.fulfilled;
+    await d.createSession({
+      alwaysMatch: {
+        platformName: 'iOS',
+        'appium:extra': 'cheese',
+        'appium:hold the': 'sauce',
+      },
+      firstMatch: [{}],
+    }).should.be.fulfilled;
   });
 
   it('should log the use of extra caps', async function () {
     this.timeout(500);
 
-    await d.createSession(null, null, {
+    await d.createSession({
       alwaysMatch: {
         platformName: 'iOS',
-        'appium:deviceName': 'Delorean',
         'appium:extra': 'cheese',
         'appium:hold the': 'sauce',
       },
       firstMatch: [{}],
     });
 
-    d.log.warn.should.have.been.called;
+    logWarnSpy.called.should.be.true;
   });
 
   it('should be sensitive to the case of caps', async function () {
     await d
-      .createSession(null, null, {
+      .createSession({
         alwaysMatch: {
           // @ts-expect-error
           platformname: 'iOS',
-          'appium:deviceName': 'Delorean',
         },
         firstMatch: [{}],
       })
@@ -146,47 +148,44 @@ describe('Desired Capabilities', function () {
 
   describe('boolean capabilities', function () {
     it('should allow a string "false"', async function () {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
           // @ts-expect-error
           'appium:noReset': 'false',
         },
         firstMatch: [{}],
       });
-      d.log.warn.should.have.been.called;
+      logWarnSpy.called.should.be.true;
 
       let sessions = await d.getSessions();
       sessions[0].capabilities.noReset.should.eql(false);
     });
 
     it('should allow a string "true"', async function () {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
           // @ts-expect-error
           'appium:noReset': 'true',
         },
         firstMatch: [{}],
       });
-      d.log.warn.should.have.been.called;
+      logWarnSpy.called.should.be.true;
 
       let sessions = await d.getSessions();
       sessions[0].capabilities.noReset.should.eql(true);
     });
 
     it('should allow a string "true" in string capabilities', async function () {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
           'appium:language': 'true',
         },
         firstMatch: [{}],
       });
-      d.log.warn.should.not.have.been.called;
+      logWarnSpy.called.should.be.false;
 
       let sessions = await d.getSessions();
       sessions[0].capabilities.language.should.eql('true');
@@ -195,47 +194,44 @@ describe('Desired Capabilities', function () {
 
   describe('number capabilities', function () {
     it('should allow a string "1"', async function () {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
           // @ts-expect-error
           'appium:newCommandTimeout': '1',
         },
         firstMatch: [{}],
       });
-      d.log.warn.should.have.been.called;
+      logWarnSpy.called.should.be.true;
 
       let sessions = await d.getSessions();
       sessions[0].capabilities.newCommandTimeout.should.eql(1);
     });
 
     it('should allow a string "1.1"', async function () {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
           // @ts-expect-error
           'appium:newCommandTimeout': '1.1',
         },
         firstMatch: [{}],
       });
-      d.log.warn.should.have.been.called;
+      logWarnSpy.called.should.be.true;
 
       let sessions = await d.getSessions();
       sessions[0].capabilities.newCommandTimeout.should.eql(1.1);
     });
 
     it('should allow a string "1" in string capabilities', async function () {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
           'appium:language': '1',
         },
         firstMatch: [{}],
       });
-      d.log.warn.should.not.have.been.called;
+      logWarnSpy.called.should.be.false;
 
       let sessions = await d.getSessions();
       sessions[0].capabilities.language.should.eql('1');
@@ -244,11 +240,10 @@ describe('Desired Capabilities', function () {
 
   it('should error if objects in caps', async function () {
     await d
-      .createSession(null, null, {
+      .createSession({
         alwaysMatch: {
           // @ts-expect-error
           platformName: {a: 'iOS'},
-          'appium:deviceName': 'Delorean',
         },
         firstMatch: [{}],
       })
@@ -264,16 +259,15 @@ describe('Desired Capabilities', function () {
       },
     };
 
-    await d.createSession(null, null, {
+    await d.createSession({
       alwaysMatch: {
         platformName: 'iOS',
-        'appium:deviceName': 'Delorean',
         'appium:lynx-version': 5,
       },
       firstMatch: [{}],
     });
 
-    validator.validators.deprecated.should.have.been.calledWith(5, true, 'lynx-version');
+    (deprecatedStub.calledWith(5, true, 'lynx-version')).should.be.true;
   });
 
   it('should not warn if deprecated=false', async function () {
@@ -285,16 +279,15 @@ describe('Desired Capabilities', function () {
       },
     };
 
-    await d.createSession(null, null, {
+    await d.createSession({
       alwaysMatch: {
         platformName: 'iOS',
-        'appium:deviceName': 'Delorean',
         'appium:lynx-version': 5,
       },
       firstMatch: [{}],
     });
 
-    d.log.warn.should.not.have.been.called;
+    logWarnSpy.called.should.be.false;
   });
 
   it('should not validate against null/undefined caps', async function () {
@@ -305,10 +298,9 @@ describe('Desired Capabilities', function () {
     };
 
     try {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': null,
         },
         firstMatch: [{}],
@@ -318,10 +310,9 @@ describe('Desired Capabilities', function () {
     }
 
     await d
-      .createSession(null, null, {
+      .createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': 1,
         },
         firstMatch: [{}],
@@ -329,10 +320,9 @@ describe('Desired Capabilities', function () {
       .should.be.rejectedWith(/'foo' must be of type string/);
 
     try {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': undefined,
         },
         firstMatch: [{}],
@@ -342,10 +332,9 @@ describe('Desired Capabilities', function () {
     }
 
     try {
-      await d.createSession(null, null, {
+      await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': '',
         },
         firstMatch: [{}],
@@ -363,10 +352,9 @@ describe('Desired Capabilities', function () {
     };
 
     await d
-      .createSession(null, null, {
+      .createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': null,
         },
         firstMatch: [{}],
@@ -374,10 +362,10 @@ describe('Desired Capabilities', function () {
       .should.be.rejectedWith(/blank/);
 
     await d
+      // @ts-expect-error `null` is not actually allowed here
       .createSession(null, {
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': '',
         },
         firstMatch: [{}],
@@ -389,7 +377,6 @@ describe('Desired Capabilities', function () {
         firstMatch: [
           {
             platformName: 'iOS',
-            'appium:deviceName': 'Dumb',
             'appium:foo': {},
           },
         ],
@@ -401,7 +388,6 @@ describe('Desired Capabilities', function () {
       .createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': [],
         },
         firstMatch: [{}],
@@ -412,7 +398,6 @@ describe('Desired Capabilities', function () {
       .createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Dumb',
           'appium:foo': '  ',
         },
         firstMatch: [{}],
@@ -422,17 +407,15 @@ describe('Desired Capabilities', function () {
 
   describe('w3c', function () {
     it('should accept w3c capabilities', async function () {
-      const [sessionId, caps] = await d.createSession(null, null, {
+      const [sessionId, caps] = await d.createSession({
         alwaysMatch: {
           platformName: 'iOS',
-          'appium:deviceName': 'Delorean',
         },
         firstMatch: [{}],
       });
       sessionId.should.exist;
       caps.should.eql({
         platformName: 'iOS',
-        deviceName: 'Delorean',
       });
     });
 
@@ -442,7 +425,7 @@ describe('Desired Capabilities', function () {
       await B.map(testValues, (val) =>
         d
           // @ts-expect-error
-          .createSession(null, null, val)
+          .createSession(val)
           .should.be.rejectedWith(errors.SessionNotCreatedError)
       );
     });

@@ -1,12 +1,20 @@
 import _ from 'lodash';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {timing} from '../../lib';
-
-const expect = chai.expect;
 
 describe('timing', function () {
   let processMock;
   let sandbox;
+  let expect;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import ('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();
