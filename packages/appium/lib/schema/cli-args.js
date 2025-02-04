@@ -2,7 +2,7 @@ import {ArgumentTypeError} from 'argparse';
 import _ from 'lodash';
 import {formatErrors as formatErrors} from '../config-file';
 import {flattenSchema, validate} from './schema';
-import {transformers} from './cli-transformers';
+import {transformers, parseCsvLine} from './cli-transformers';
 
 /**
  * This module concerns functions which convert schema definitions to
@@ -94,7 +94,7 @@ function makeDescription(schema) {
  * as understood by `argparse`.
  * @param {AppiumJSONSchema} subSchema - JSON schema for the option
  * @param {ArgSpec} argSpec - Argument spec tuple
- * @returns {[string[], import('argparse').ArgumentOptions]} Tuple of flag and options
+ * @returns {[[string]|[string, string], import('argparse').ArgumentOptions]} Tuple of flag and options
  */
 function subSchemaToArgDef(subSchema, argSpec) {
   let {type, appiumCliAliases, appiumCliTransformer, enum: enumValues} = subSchema;
@@ -136,13 +136,19 @@ function subSchemaToArgDef(subSchema, argSpec) {
     }
 
     case TYPENAMES.OBJECT: {
-      argTypeFunction = transformers.json;
+      argTypeFunction = _.flow(transformers.json, (o) => {
+        // Arrays and plain strings are also valid JSON
+        if (!_.isPlainObject(o)) {
+          throw new ArgumentTypeError(`'${_.truncate(o, {length: 100})}' must be a plain object`);;
+        }
+        return o;
+      });
       break;
     }
 
     // arrays are treated as CSVs, because `argparse` doesn't handle array data.
     case TYPENAMES.ARRAY: {
-      argTypeFunction = transformers.csv;
+      argTypeFunction = parseCsvLine;
       break;
     }
 
@@ -182,12 +188,13 @@ function subSchemaToArgDef(subSchema, argSpec) {
     argOpts.metavar = screamingSnakeCase(name);
   }
 
-  // the validity of "appiumCliTransformer" should already have been determined
-  // by ajv during schema validation in `finalizeSchema()`. the `array` &
-  // `object` types have already added a formatter (see above, so we don't do it
-  // twice).
-  if (type !== TYPENAMES.ARRAY && type !== TYPENAMES.OBJECT && appiumCliTransformer) {
-    argTypeFunction = _.flow(argTypeFunction ?? _.identity, transformers[appiumCliTransformer]);
+  if (appiumCliTransformer && transformers[appiumCliTransformer]) {
+    if (type === TYPENAMES.ARRAY) {
+      const csvTransformer = /** @type {(x: string) => string[]} */ (argTypeFunction);
+      argTypeFunction = (val) => _.flatMap(csvTransformer(val).map(transformers[appiumCliTransformer]));
+    } else {
+      argTypeFunction = _.flow(argTypeFunction ?? _.identity, transformers[appiumCliTransformer]);
+    }
   }
 
   if (argTypeFunction) {
@@ -207,7 +214,10 @@ function subSchemaToArgDef(subSchema, argSpec) {
     }
   }
 
-  return [aliases, argOpts];
+  // TODO: argparse only accepts the command name and a single alias; any extra aliases
+  // will be silently discarded.
+  const finalAliases = /** @type {[string]|[string, string]} */ (aliases);
+  return [finalAliases, argOpts];
 }
 
 /**
@@ -224,7 +234,7 @@ export function toParserArgs() {
 }
 
 /**
- * @template T
+ * @template {string|number} T
  * @typedef {import('ajv/dist/types').FormatValidator<T>} FormatValidator<T>
  */
 

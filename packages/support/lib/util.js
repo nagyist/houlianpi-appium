@@ -2,8 +2,8 @@ import B from 'bluebird';
 import _ from 'lodash';
 import os from 'os';
 import path from 'path';
-import fs from './fs';
-import semver from 'semver';
+import { fs } from './fs';
+import * as semver from 'semver';
 import {
   // https://www.npmjs.com/package/shell-quote
   quote as shellQuote,
@@ -19,7 +19,7 @@ import {
   v4 as uuidV4,
   v5 as uuidV5,
 } from 'uuid';
-import _lockfile from 'lockfile';
+import * as _lockfile from 'lockfile';
 
 const W3C_WEB_ELEMENT_IDENTIFIER = 'element-6066-11e4-a52e-4f735466cecf';
 const KiB = 1024;
@@ -84,10 +84,8 @@ function localIp() {
   let ip = _.chain(os.networkInterfaces())
     .values()
     .flatten()
-    // @ts-ignore
-    .filter(function (val) {
-      return val.family === 'IPv4' && val.internal === false;
-    })
+    // @ts-ignore this filter works fine
+    .filter(({family, internal}) => family === 'IPv4' && internal === false)
     .map('address')
     .first()
     .value();
@@ -115,6 +113,7 @@ function cancellableDelay(ms) {
   // a promise, since `resolve`/`reject` are never called
   delay.cancel = function () {
     clearTimeout(timer);
+    // eslint-disable-next-line import/no-named-as-default-member
     reject(new B.CancellationError());
   };
   return delay;
@@ -124,35 +123,36 @@ function multiResolve(roots, ...args) {
   return roots.map((root) => path.resolve(root, ...args));
 }
 
-/*
+/**
  * Parses an object if possible. Otherwise returns the object without parsing.
+ *
+ * @param {any} obj
+ * @returns {any}
  */
 function safeJsonParse(obj) {
   try {
     return JSON.parse(obj);
-  } catch (ign) {
+  } catch {
     // ignore: this is not json parsable
     return obj;
   }
 }
 
-/*
+/**
  * Stringifies the object passed in, converting Buffers into Strings for better
  * display. This mimics JSON.stringify (see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify)
  * except the `replacer` argument can only be a function.
  *
- * @param {object} obj - the object to be serialized
- * @param {?function} replacer - function to transform the properties added to the
+ * @param {any} obj - the object to be serialized
+ * @param {((key:any, value:any) => any)?} replacer - function to transform the properties added to the
  *                               serialized object
- * @param {?number|string} space - used to insert white space into the output JSON
+ * @param {number|string|undefined} space - used to insert white space into the output JSON
  *                                 string for readability purposes. Defaults to 2
- * returns {string} - the JSON object serialized as a string
+ * @returns {string} - the JSON object serialized as a string
  */
-function jsonStringify(obj, replacer, space = 2) {
+function jsonStringify(obj, replacer = null, space = 2) {
   // if no replacer is passed, or it is not a function, just use a pass-through
-  if (!_.isFunction(replacer)) {
-    replacer = (k, v) => v;
-  }
+  const replacerFunc = _.isFunction(replacer) ? replacer : (k, v) => v;
 
   // Buffers cannot be serialized in a readable way
   const bufferToJSON = Buffer.prototype.toJSON;
@@ -162,7 +162,7 @@ function jsonStringify(obj, replacer, space = 2) {
       obj,
       (key, value) => {
         const updatedValue = Buffer.isBuffer(value) ? value.toString('utf8') : value;
-        return replacer(key, updatedValue);
+        return replacerFunc(key, updatedValue);
       },
       space
     );
@@ -172,20 +172,27 @@ function jsonStringify(obj, replacer, space = 2) {
   }
 }
 
-/*
+/**
  * Removes the wrapper from element, if it exists.
  *   { ELEMENT: 4 } becomes 4
  *   { element-6066-11e4-a52e-4f735466cecf: 5 } becomes 5
+ * @param {import('@appium/types').Element|string} el
+ * @returns {string}
  */
 function unwrapElement(el) {
   for (const propName of [W3C_WEB_ELEMENT_IDENTIFIER, 'ELEMENT']) {
     if (_.has(el, propName)) {
-      return el[propName];
+      return /** @type {string} */ (el[propName]);
     }
   }
-  return el;
+  return /** @type {string} */(el);
 }
 
+/**
+ *
+ * @param {string} elementId
+ * @returns {import('@appium/types').Element}
+ */
 function wrapElement(elementId) {
   return {
     ELEMENT: elementId,
@@ -350,18 +357,6 @@ function compareVersions(ver1, operator, ver2) {
  */
 function quote(args) {
   return shellQuote(_.castArray(args));
-}
-
-/**
- * This function is necessary to workaround unexpected memory leaks
- * caused by NodeJS string interning
- * behavior described in https://bugs.chromium.org/p/v8/issues/detail?id=2869
- *
- * @param {*} s - The string to unleak
- * @return {string} Either the unleaked string or the original object converted to string
- */
-function unleakString(s) {
-  return ` ${s}`.substr(1);
 }
 
 /**
@@ -549,7 +544,6 @@ export {
   compareVersions,
   coerceVersion,
   quote,
-  unleakString,
   jsonStringify,
   pluralize,
   GiB,

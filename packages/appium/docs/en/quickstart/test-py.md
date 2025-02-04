@@ -1,4 +1,7 @@
 ---
+hide:
+  - toc
+
 title: Write a Test (Python)
 ---
 
@@ -23,10 +26,16 @@ You usually do not need to worry about the prefix.
 
     It's not within the scope of this guide to give a complete run-down on the Python client
     library or everything that's happening here, so we'll leave the code itself unexplained in detail for now.
+
     - You may want to read up particularly on Appium [Capabilities](../guides/caps.md).
     - [functional test code](https://github.com/appium/python-client/tree/master/test/functional) in Python Client GitHub repository should help to find more working example.
     - [Documentation](https://appium.github.io/python-client-sphinx/) also helps to find methods
     defined in the Appium Python Client.
+
+!!! note
+
+    The sample code is available from [GitHub Appium repository](https://github.com/appium/appium/tree/master/packages/appium/sample-code/quickstarts/py).
+
 
 Basically, this code is doing the following:
 
@@ -48,4 +57,4 @@ python test.py
 If all goes well, you'll see the Settings app open up and navigate to the "Battery" view before the
 app closes again.
 
-Congratulations, you've started your Appium journey! Read on for some next steps to explore.
+Congratulations, you've started your Appium journey! Read on for some [next steps](./next-steps.md) to explore.

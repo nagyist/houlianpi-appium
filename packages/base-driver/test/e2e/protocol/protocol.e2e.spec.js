@@ -1,6 +1,7 @@
 import {server, routeConfiguringFunction, errors, JWProxy, BaseDriver} from '../../../lib';
 import {FakeDriver} from './fake-driver';
 import axios from 'axios';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {StatusCodes as HTTPStatusCodes} from 'http-status-codes';
 import {createProxyServer} from './helpers';
@@ -12,6 +13,7 @@ let baseUrl;
 
 describe('Protocol', function () {
   let sandbox;
+  let should;
 
   beforeEach(function () {
     sandbox = createSandbox();
@@ -22,6 +24,11 @@ describe('Protocol', function () {
   });
 
   before(async function () {
+    const chai = await import('chai');
+    const chaisAsPromised = await import('chai-as-promised');
+    chai.use(chaisAsPromised.default);
+    should = chai.should();
+
     port = await getTestPort();
     baseUrl = `http://${TEST_HOST}:${port}`;
   });
@@ -428,7 +435,7 @@ describe('Protocol', function () {
           status.should.equal(400);
 
           const {error: w3cError, message, stacktrace} = data.value;
-          message.should.match(/Parameters were incorrect/);
+          message.should.match(/following required parameter/);
           stacktrace.should.match(/protocol.js/);
           w3cError.should.be.a.string;
           w3cError.should.equal(errors.InvalidArgumentError.error());
@@ -911,7 +918,7 @@ describe('Protocol', function () {
     });
 
     it('should pass on any errors in proxying', async function () {
-      // eslint-disable-next-line require-await
+
       driver.proxyReqRes = async function () {
         throw new Error('foo');
       };
@@ -932,7 +939,7 @@ describe('Protocol', function () {
     });
 
     it('should able to throw ProxyRequestError in proxying', async function () {
-      // eslint-disable-next-line require-await
+
       driver.proxyReqRes = async function () {
         let jsonwp = {
           status: 35,
@@ -955,7 +962,7 @@ describe('Protocol', function () {
     });
 
     it('should let the proxy handle req/res', async function () {
-      // eslint-disable-next-line require-await
+
       driver.proxyReqRes = async function (req, res) {
         res.status(200).json({custom: 'data'});
       };

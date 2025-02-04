@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 
+import {WebSocketServer} from 'ws';
 import {init as logsinkInit} from './logsink'; // this import needs to come first since it sets up global npmlog
 import logger from './logger'; // logger needs to remain second
-// @ts-ignore
-import {routeConfiguringFunction as makeRouter, server as baseServer} from '@appium/base-driver';
-import {logger as logFactory, util, env} from '@appium/support';
+import {
+  routeConfiguringFunction as makeRouter,
+  server as baseServer,
+  normalizeBasePath,
+} from '@appium/base-driver';
+import {util, env} from '@appium/support';
 import {asyncify} from 'asyncbox';
 import _ from 'lodash';
 import {AppiumDriver} from './appium';
 import {runExtensionCommand} from './cli/extension';
+import { runSetupCommand } from './cli/setup-command';
 import {getParser} from './cli/parser';
 import {
   APPIUM_VER,
@@ -17,15 +22,14 @@ import {
   getNonDefaultServerArgs,
   showConfig,
   showBuildInfo,
-  validateTmpDir,
-  warnNodeDeprecations,
-  checkNpmOk,
+  showDebugInfo,
+  requireDir,
 } from './config';
 import {readConfigFile} from './config-file';
 import {loadExtensions, getActivePlugins, getActiveDrivers} from './extension';
-import {SERVER_SUBCOMMAND} from './constants';
+import {SERVER_SUBCOMMAND, LONG_STACKTRACE_LIMIT} from './constants';
 import registerNode from './grid-register';
-import {getDefaultsForSchema, validate} from './schema/schema';
+import {getDefaultsForSchema, validate as validateSchema} from './schema/schema';
 import {
   inspect,
   adjustNodePath,
@@ -33,9 +37,22 @@ import {
   isExtensionCommandArgs,
   isPluginCommandArgs,
   isServerCommandArgs,
+  fetchInterfaces,
+  V4_BROADCAST_IP,
+  isSetupCommandArgs,
+  isBroadcastIp,
 } from './utils';
+import net from 'node:net';
 
 const {resolveAppiumHome} = env;
+/*
+ * By default Node.js shows a warning
+ * if the actual amount of listeners exceeds the maximum amount,
+ * which equals to 10 by default. It is known that multiple drivers/plugins
+ * may assign custom listeners to the server process to handle, for example,
+ * the graceful shutdown scenario.
+ */
+const MAX_SERVER_PROCESS_LISTENERS = 100;
 
 /**
  *
@@ -45,20 +62,18 @@ const {resolveAppiumHome} = env;
 async function preflightChecks(args, throwInsteadOfExit = false) {
   try {
     checkNodeOk();
-    await checkNpmOk();
     if (args.longStacktrace) {
-      require('longjohn').async_trace_limit = -1;
+      Error.stackTraceLimit = LONG_STACKTRACE_LIMIT;
     }
     if (args.showBuildInfo) {
       await showBuildInfo();
       process.exit(0);
     }
-    warnNodeDeprecations();
 
-    validate(args);
+    validateSchema(args);
 
     if (args.tmpDir) {
-      await validateTmpDir(args.tmpDir);
+      await requireDir(args.tmpDir, !args.noPermsCheck, 'tmpDir argument value');
     }
   } catch (err) {
     logger.error(err.message.red);
@@ -84,7 +99,7 @@ function logNonDefaultArgsWarning(args) {
 function logDefaultCapabilitiesWarning(caps) {
   logger.info(
     'Default capabilities, which will be added to each request ' +
-      'unless overridden by desired capabilities:'
+      'unless overridden by desired capabilities:',
   );
   inspect(caps);
 }
@@ -115,17 +130,6 @@ async function logStartupInfo(args) {
 }
 
 /**
- * Logs the address and port the server is listening on
- * @param {string} address - Address
- * @param {number} port - Port
- * @returns {void}
- */
-function logServerPort(address, port) {
-  let logMessage = `Appium REST http interface listener started on ` + `${address}:${port}`;
-  logger.info(logMessage);
-}
-
-/**
  * Gets a list of `updateServer` functions from all extensions
  * @param {DriverNameMap} driverClasses
  * @param {PluginNameMap} pluginClasses
@@ -147,9 +151,23 @@ function getExtraMethodMap(driverClasses, pluginClasses) {
       ...map,
       ...(klass.newMethodMap ?? {}),
     }),
-    {}
+    {},
   );
 }
+
+/**
+ * @param {string?} [appiumHomeFromArgs] - Appium home value retrieved from progrmmatic server args
+ * @returns {string}
+ */
+function determineAppiumHomeSource(appiumHomeFromArgs) {
+  if (!_.isNil(appiumHomeFromArgs)) {
+    return 'appiumHome config value';
+  } else if (process.env.APPIUM_HOME) {
+    return 'APPIUM_HOME environment variable';
+  }
+  return 'autodetected Appium home path';
+}
+
 /**
  * Initializes Appium, but does not start the server.
  *
@@ -169,6 +187,10 @@ function getExtraMethodMap(driverClasses, pluginClasses) {
  */
 async function init(args) {
   const appiumHome = args?.appiumHome ?? (await resolveAppiumHome());
+  const appiumHomeSourceName = determineAppiumHomeSource(args?.appiumHome);
+  // We verify the writeability later based on requested server arguments
+  // Here we just need to make sure the path exists and is a folder
+  await requireDir(appiumHome, false, appiumHomeSourceName);
 
   adjustNodePath();
 
@@ -200,12 +222,12 @@ async function init(args) {
     throw new Error(
       `Errors in config file ${configResult.filepath}:\n ${
         configResult.reason ?? configResult.errors
-      }`
+      }`,
     );
   }
 
   // merge config and apply defaults.
-  // the order of precendece is:
+  // the order of precedence is:
   // 1. command line args
   // 2. config file
   // 3. defaults from config file.
@@ -220,32 +242,53 @@ async function init(args) {
       return /** @type {InitResult<Cmd>} */ ({});
     }
 
+    if (preConfigArgs.showDebugInfo) {
+      await showDebugInfo({
+        driverConfig,
+        pluginConfig,
+        appiumHome,
+      });
+      return /** @type {InitResult<Cmd>} */ ({});
+    }
+
     await logsinkInit(serverArgs);
 
     if (serverArgs.logFilters) {
-      const {issues, rules} = await logFactory.loadSecureValuesPreprocessingRules(
-        serverArgs.logFilters
+      const {issues, rules} = await logger.unwrap().loadSecureValuesPreprocessingRules(
+        serverArgs.logFilters,
       );
+      const argToLog = _.truncate(JSON.stringify(serverArgs.logFilters), {
+        length: 150
+      });
       if (!_.isEmpty(issues)) {
         throw new Error(
-          `The log filtering rules config '${serverArgs.logFilters}' has issues: ` +
-            JSON.stringify(issues, null, 2)
+          `The log filtering rules config ${argToLog} has issues: ` +
+            JSON.stringify(issues, null, 2),
         );
       }
       if (_.isEmpty(rules)) {
         logger.warn(
-          `Found no log filtering rules in '${serverArgs.logFilters}'. Is that expected?`
+          `Found no log filtering rules in the ${argToLog} config. ` +
+          `Is that expected?`,
         );
       } else {
+        // Filtering aims to "hide" these values from the log,
+        // so it would be nice to not show them in the log as well.
         logger.info(
-          `Loaded ${util.pluralize('filtering rule', rules.length, true)} from '${
-            serverArgs.logFilters
-          }'`
+          `Loaded ${util.pluralize('filtering rule', rules.length, true)}`,
         );
       }
     }
 
-    const appiumDriver = new AppiumDriver(serverArgs);
+    if (!serverArgs.noPermsCheck) {
+      await requireDir(appiumHome, true, appiumHomeSourceName);
+    }
+
+    const appiumDriver = new AppiumDriver(
+      /** @type {import('@appium/types').DriverOpts<import('./appium').AppiumDriverConstraints>} */ (
+        serverArgs
+      ),
+    );
     // set the config on the umbrella driver so it can match drivers to caps
     appiumDriver.driverConfig = driverConfig;
     await preflightChecks(serverArgs, throwInsteadOfExit);
@@ -255,8 +298,13 @@ async function init(args) {
       parsedArgs: serverArgs,
       driverConfig,
       pluginConfig,
+      appiumHome,
     });
+  } else if (isSetupCommandArgs(preConfigArgs)) {
+    await runSetupCommand(preConfigArgs, driverConfig, pluginConfig);
+    return /** @type {InitResult<Cmd>} */ ({});
   } else {
+    await requireDir(appiumHome, true, appiumHomeSourceName);
     if (isExtensionCommandArgs(preConfigArgs)) {
       // if the user has requested the 'driver' CLI, don't run the normal server,
       // but instead pass control to the driver CLI
@@ -269,6 +317,32 @@ async function init(args) {
     }
     return /** @type {InitResult<Cmd>} */ ({});
   }
+}
+
+/**
+ * Prints the actual server address and the list of URLs that
+ * could be used to connect to the current server.
+ * Properly replaces broadcast addresses in client URLs.
+ *
+ * @param {string} url The URL the server is listening on
+ */
+function logServerAddress(url) {
+  const urlObj = new URL(url);
+  logger.info(`Appium REST http interface listener started on ${url}`);
+  if (!isBroadcastIp(urlObj.hostname)) {
+    return;
+  }
+
+  const interfaces = fetchInterfaces(urlObj.hostname === V4_BROADCAST_IP ? 4 : 6);
+  const toLabel = (/** @type {import('node:os').NetworkInterfaceInfo} */ iface) => {
+    const href = urlObj.href.replace(urlObj.hostname, iface.address);
+    return iface.internal ? `${href} (only accessible from the same host)` : href;
+  };
+  logger.info(
+    `You can provide the following ${interfaces.length === 1 ? 'URL' : 'URLs'} ` +
+      `in your client code to connect to this server:\n` +
+      interfaces.map((iface) => `\t${toLabel(iface)}`).join('\n'),
+  );
 }
 
 /**
@@ -290,17 +364,25 @@ async function main(args) {
     );
   }
 
-  const {appiumDriver, pluginConfig, driverConfig, parsedArgs} =
+  const {appiumDriver, pluginConfig, driverConfig, parsedArgs, appiumHome} =
     /** @type {InitResult<ServerCommand>} */ (initResult);
 
-  const pluginClasses = getActivePlugins(pluginConfig, parsedArgs.usePlugins);
+  const pluginClasses = await getActivePlugins(
+    pluginConfig, parsedArgs.pluginsImportChunkSize, parsedArgs.usePlugins
+  );
   // set the active plugins on the umbrella driver so it can use them for commands
   appiumDriver.pluginClasses = pluginClasses;
 
   await logStartupInfo(parsedArgs);
+
+  const appiumHomeSourceName = determineAppiumHomeSource(args?.appiumHome);
+  logger.debug(`The ${appiumHomeSourceName}: ${appiumHome}`);
+
   let routeConfiguringFunction = makeRouter(appiumDriver);
 
-  const driverClasses = getActiveDrivers(driverConfig, parsedArgs.useDrivers);
+  const driverClasses = await getActiveDrivers(
+    driverConfig, parsedArgs.driversImportChunkSize, parsedArgs.useDrivers
+  );
   const serverUpdaters = getServerUpdaters(driverClasses, pluginClasses);
   const extraMethodMap = getExtraMethodMap(driverClasses, pluginClasses);
 
@@ -319,12 +401,17 @@ async function main(args) {
     serverOpts.keepAliveTimeout = parsedArgs.keepAliveTimeout * 1000;
   }
   let server;
+  const bidiServer = new WebSocketServer({noServer: true});
+  bidiServer.on('connection', appiumDriver.onBidiConnection.bind(appiumDriver));
+  bidiServer.on('error', appiumDriver.onBidiServerError.bind(appiumDriver));
   try {
     server = await baseServer(serverOpts);
+    server.addWebSocketHandler('/bidi', bidiServer);
+    server.addWebSocketHandler('/bidi/:sessionId', bidiServer);
   } catch (err) {
     logger.error(
       `Could not configure Appium server. It's possible that a driver or plugin tried ` +
-        `to update the server and failed. Original error: ${err.message}`
+        `to update the server and failed. Original error: ${err.message}`,
     );
     logger.debug(err.stack);
     return process.exit(1);
@@ -334,7 +421,7 @@ async function main(args) {
     logger.warn(
       'You have enabled CORS requests from any host. Be careful not ' +
         'to visit sites which could maliciously try to start Appium ' +
-        'sessions on your machine'
+        'sessions on your machine',
     );
   }
   appiumDriver.server = server;
@@ -346,7 +433,7 @@ async function main(args) {
         parsedArgs.nodeconfig,
         parsedArgs.address,
         parsedArgs.port,
-        parsedArgs.basePath
+        parsedArgs.basePath,
       );
     }
   } catch (err) {
@@ -354,14 +441,12 @@ async function main(args) {
     throw err;
   }
 
+  process.setMaxListeners(MAX_SERVER_PROCESS_LISTENERS);
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, async function onSignal() {
       logger.info(`Received ${signal} - shutting down`);
       try {
-        await appiumDriver.deleteAllSessions({
-          force: true,
-          reason: `The process has received ${signal} signal`,
-        });
+        await appiumDriver.shutdown(`The process has received ${signal} signal`);
         await server.close();
         process.exit(0);
       } catch (e) {
@@ -371,7 +456,12 @@ async function main(args) {
     });
   }
 
-  logServerPort(parsedArgs.address, parsedArgs.port);
+  const protocol = server.isSecure() ? 'https' : 'http';
+  const address = net.isIPv6(parsedArgs.address) ? `[${parsedArgs.address}]` : parsedArgs.address;
+  logServerAddress(
+    `${protocol}://${address}:${parsedArgs.port}${normalizeBasePath(parsedArgs.basePath)}`,
+  );
+
   driverConfig.print();
   pluginConfig.print([...pluginClasses.values()]);
 
@@ -403,6 +493,7 @@ export {main, init, resolveAppiumHome};
  * @typedef {import('appium/types').CliCommandServer} ServerCommand
  * @typedef {import('appium/types').CliCommandDriver} DriverCommand
  * @typedef {import('appium/types').CliCommandPlugin} PluginCommand
+ * @typedef {import('appium/types').CliCommandSetup} SetupCommand
  * @typedef {import('./extension').DriverNameMap} DriverNameMap
  * @typedef {import('./extension').PluginNameMap} PluginNameMap
  */
@@ -416,6 +507,7 @@ export {main, init, resolveAppiumHome};
  * @typedef ServerInitData
  * @property {import('./appium').AppiumDriver} appiumDriver - The Appium driver
  * @property {import('appium/types').ParsedArgs} parsedArgs - The parsed arguments
+ * @property {string} appiumHome - The full path to the Appium home folder
  */
 
 /**

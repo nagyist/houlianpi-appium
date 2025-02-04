@@ -1,7 +1,7 @@
 import _ from 'lodash';
 import log from './logger';
 import B from 'bluebird';
-import {getJimpImage, MIME_PNG} from './image-util';
+import {requireSharp} from './image-util';
 import {Writable} from 'stream';
 import {requirePackage} from './node';
 import axios from 'axios';
@@ -16,7 +16,7 @@ async function initMJpegConsumer() {
   if (!MJpegConsumer) {
     try {
       MJpegConsumer = await requirePackage('mjpeg-consumer');
-    } catch (ign) {}
+    } catch {}
   }
   if (!MJpegConsumer) {
     throw new Error(
@@ -77,9 +77,8 @@ class MJpegStream extends Writable {
     }
 
     try {
-      const jpg = await getJimpImage(lastChunk);
-      return await jpg.getBuffer(MIME_PNG);
-    } catch (e) {
+      return await requireSharp()(lastChunk).png().toBuffer();
+    } catch {
       return null;
     }
   }
@@ -117,22 +116,23 @@ class MJpegStream extends Writable {
     await initMJpegConsumer();
 
     this.consumer = new MJpegConsumer();
-
-    // use the deferred pattern so we can wait for the start of the stream
-    // based on what comes in from an external pipe
-    const startPromise = new B((res, rej) => {
-      this.registerStartSuccess = res;
-      this.registerStartFailure = rej;
-    })
-      // start a timeout so that if the server does not return data, we don't
-      // block forever.
-      .timeout(
-        serverTimeout,
-        `Waited ${serverTimeout}ms but the MJPEG server never sent any images`
-      );
-
     const url = this.url;
-    const onErr = (err) => {
+    try {
+      this.responseStream = (
+        await axios({
+          url,
+          responseType: 'stream',
+          timeout: serverTimeout,
+        })
+      ).data;
+    } catch (e) {
+      throw new Error(
+        `Cannot connect to the MJPEG stream at ${url}. ` +
+        `Original error: ${_.has(e, 'response') ? JSON.stringify(e.response) : /** @type {Error} */ (e).message}`
+      );
+    }
+
+    const onErr = (/** @type {Error} */ err) => {
       // Make sure we don't get an outdated screenshot if there was an error
       this.lastChunk = null;
 
@@ -146,18 +146,18 @@ class MJpegStream extends Writable {
       log.debug(`The connection to MJPEG server at ${url} has been closed`);
       this.lastChunk = null;
     };
-
-    try {
-      this.responseStream = (
-        await axios({
-          url,
-          responseType: 'stream',
-          timeout: serverTimeout,
-        })
-      ).data;
-    } catch (e) {
-      return onErr(e);
-    }
+    // use the deferred pattern so we can wait for the start of the stream
+    // based on what comes in from an external pipe
+    const startPromise = new B((res, rej) => {
+      this.registerStartSuccess = res;
+      this.registerStartFailure = rej;
+    })
+      // start a timeout so that if the server does not return data, we don't
+      // block forever.
+      .timeout(
+        serverTimeout,
+        `Waited ${serverTimeout}ms but the MJPEG server never sent any images`
+      );
 
     this.responseStream
       .once('close', onClose)
@@ -173,13 +173,15 @@ class MJpegStream extends Writable {
    * the HTTP request itself. Then reset the state.
    */
   stop() {
-    if (!this.consumer) {
-      return;
+    if (this.consumer) {
+      this.consumer.unpipe(this);
     }
-
-    this.responseStream.unpipe(this.consumer);
-    this.consumer.unpipe(this);
-    this.responseStream.destroy();
+    if (this.responseStream) {
+      if (this.consumer) {
+        this.responseStream.unpipe(this.consumer);
+      }
+      this.responseStream.destroy();
+    }
     this.clear();
   }
 

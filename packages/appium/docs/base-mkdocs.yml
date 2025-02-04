@@ -2,13 +2,31 @@ INHERIT: ../../docutils/base-mkdocs.yml
 site_name: Appium Documentation
 repo_url: https://github.com/appium/appium
 repo_name: appium/appium
-copyright: Copyright &copy; 2012 OpenJS Foundation
+edit_uri: edit/master/packages/appium/docs
+copyright: Copyright &copy; 2012 OpenJS Foundation - <a href="#__consent">Change cookie settings</a>
 
 theme:
   logo: assets/images/appium-logo-white.png
   favicon: assets/images/appium-logo.png
-  features:
-    - navigation.sections
+  custom_dir: overrides
+
+plugins:
+  blog:
+    enabled: true
+    post_excerpt: required
+  redirects:
+    redirect_maps:
+      'intro/requirements.md': 'quickstart/requirements.md'
+      'ecosystem/build-drivers.md': 'developing/build-drivers.md'
+      'ecosystem/build-plugins.md': 'developing/build-plugins.md'
+      'ecosystem/build-docs.md': 'developing/build-docs.md'
+      'reference/commands/base-driver.md': 'commands/base-driver.md'
+      'reference/commands/execute-driver-plugin.md': 'commands/execute-driver-plugin.md'
+      'reference/commands/images-plugin.md': 'commands/images-plugin.md'
+      'reference/commands/relaxed-caps-plugin.md': 'commands/relaxed-caps-plugin.md'
+      'reference/commands/universal-xml-plugin.md': 'commands/universal-xml-plugin.md'
+      'contributing/config-system.md': 'developing/config-system.md'
+      'contributing/develop.md': 'contributing.md'
 
 extra_css:
   - assets/stylesheets/extra.css
@@ -22,11 +40,11 @@ extra:
       link: https://twitter.com/AppiumDevs
   alternate:
     - name: English
-      link: /appium/docs/en/ 
+      link: /docs/en/
       lang: en
     - name: 日本
-      link: /appium/docs/ja/
+      link: /docs/ja/
       lang: ja
     - name: 中文简体
-      link: /appium/docs/zh/
+      link: /docs/zh/
       lang: zh

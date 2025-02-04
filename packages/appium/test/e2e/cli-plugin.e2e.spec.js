@@ -5,8 +5,6 @@ import {EXT_SUBCOMMAND_RUN as RUN, PLUGIN_TYPE} from '../../lib/constants';
 import {FAKE_PLUGIN_DIR} from '../helpers';
 import {installLocalExtension, runAppiumJson} from './e2e-helpers';
 
-const {expect} = chai;
-
 describe('Plugin CLI', function () {
   /**
    * @type {string}
@@ -17,8 +15,15 @@ describe('Plugin CLI', function () {
    * @type {(args: string[]) => Promise<{ output: string, error?: string }>}
    */
   let runRun;
+  let expect;
 
   before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+
     appiumHome = await tempDir.openDir();
     const run = runAppiumJson(appiumHome);
     runRun = async (args) =>
@@ -63,7 +68,7 @@ describe('Plugin CLI', function () {
  * @typedef {import('appium/types').ManifestData} ManifestData
  * @typedef {import('@appium/types').DriverType} DriverType
  * @typedef {import('@appium/types').PluginType} PluginType
- * @typedef {import('appium/lib/cli/extension-command').ExtensionListData} ExtensionListData
+ * @typedef {import('appium/lib/cli/extension-command').ExtensionList} ExtensionListData
  * @typedef {import('./e2e-helpers').CliArgs} CliArgs
  * @typedef {import('appium/types').CliExtensionSubcommand} CliExtensionSubcommand
  */

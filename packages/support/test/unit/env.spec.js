@@ -1,11 +1,9 @@
-/* eslint-disable require-await */
+
 // @ts-check
 
 import path from 'path';
 import {rewiremock} from '../helpers';
 import {initMocks} from '../mocks';
-
-const {expect} = chai;
 
 describe('env', function () {
   /** @type {typeof import('../../lib/env')} */
@@ -25,6 +23,16 @@ describe('env', function () {
 
   /** @type {string|undefined} */
   let envAppiumHome;
+
+  let expect;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+  });
 
   beforeEach(function () {
     let overrides;
@@ -76,7 +84,7 @@ describe('env', function () {
     describe('when APPIUM_HOME is set in env', function () {
       describe('when APPIUM_HOME is absolute', function () {
         beforeEach(function () {
-          process.env.APPIUM_HOME = '/some/path/to/appium-home';
+          process.env.APPIUM_HOME = path.resolve(path.sep, 'some', 'appium-home');
         });
 
         it('should resolve APPIUM_HOME from env', async function () {
@@ -86,11 +94,11 @@ describe('env', function () {
 
       describe('when APPIUM_HOME is relative', function () {
         beforeEach(function () {
-          process.env.APPIUM_HOME = 'some/path/to/appium-home';
+          process.env.APPIUM_HOME = path.join('some', 'appium-home');
         });
         it('should resolve to an absolute path', async function () {
           await expect(env.resolveAppiumHome()).to.eventually.equal(
-            path.join(process.cwd(), process.env.APPIUM_HOME)
+            path.join(process.cwd(), /** @type {string} */ (process.env.APPIUM_HOME))
           );
         });
       });
@@ -114,15 +122,7 @@ describe('env', function () {
         });
 
         describe('when `appium` is a dependency of the package in the cwd', function () {
-          describe('when the `appium` dependency spec begins with `file:`', function () {
-            beforeEach(function () {
-              MockReadPkg.resolves({devDependencies: {appium: 'file:../appium'}});
-            });
-
-            it('should resolve with the identity', async function () {
-              await expect(env.resolveAppiumHome('/somewhere')).to.eventually.equal('/somewhere');
-            });
-          });
+          const appiumHome = path.resolve(path.sep, 'somewhere');
 
           describe('when `appium` is a dependency which does not resolve to a file path`', function () {
             beforeEach(function () {
@@ -130,7 +130,7 @@ describe('env', function () {
             });
 
             it('should resolve with the identity', async function () {
-              await expect(env.resolveAppiumHome('/somewhere')).to.eventually.equal('/somewhere');
+              await expect(env.resolveAppiumHome(appiumHome)).to.eventually.equal(appiumHome);
             });
           });
 
@@ -139,7 +139,7 @@ describe('env', function () {
               MockReadPkg.resolves({devDependencies: {appium: '0.9.0'}});
             });
             it('should resolve with DEFAULT_APPIUM_HOME', async function () {
-              await expect(env.resolveAppiumHome('/somewhere')).to.eventually.equal(
+              await expect(env.resolveAppiumHome(appiumHome)).to.eventually.equal(
                 env.DEFAULT_APPIUM_HOME
               );
             });
@@ -151,27 +151,10 @@ describe('env', function () {
             });
 
             it('should resolve with DEFAULT_APPIUM_HOME', async function () {
-              await expect(env.resolveAppiumHome('/somewhere')).to.eventually.equal(
+              await expect(env.resolveAppiumHome(appiumHome)).to.eventually.equal(
                 env.DEFAULT_APPIUM_HOME
               );
             });
-          });
-        });
-
-        describe('when `appium` is a dependency of the workspace root of cwd', function () {
-          beforeEach(function () {
-            MockTeenProcess.exec.resolves({
-              stdout: JSON.stringify({
-                path: '/somewhere',
-              }),
-            });
-            MockReadPkg.resolves({devDependencies: {appium: '2.x'}});
-          });
-
-          it('should resolve with the workspace root', async function () {
-            await expect(env.resolveAppiumHome('/somewhere/else')).to.eventually.equal(
-              '/somewhere'
-            );
           });
         });
       });
@@ -206,10 +189,10 @@ describe('env', function () {
   describe('readPackageInDir()', function () {
     it('should delegate to `read-pkg`', async function () {
       await env.readPackageInDir('/somewhere');
-      expect(MockReadPkg).to.have.been.calledWithExactly({
+      MockReadPkg.calledWithExactly({
         cwd: '/somewhere',
         normalize: true,
-      });
+      }).should.be.true;
     });
   });
 
@@ -257,18 +240,6 @@ describe('env', function () {
         describe('when `appium` is not yet actually installed', function () {
           beforeEach(function () {
             MockTeenProcess.exec.rejects();
-          });
-
-          describe('when the `appium` dependency spec begins with `file:`', function () {
-            beforeEach(function () {
-              MockReadPkg.resolves({
-                dependencies: {appium: 'file:packges/appium'},
-              });
-            });
-
-            it('should resolve `true`', async function () {
-              await expect(env.hasAppiumDependency('/somewhere')).to.eventually.equal(true);
-            });
           });
 
           describe('when `appium` dep is current`', function () {

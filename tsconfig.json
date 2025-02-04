@@ -8,8 +8,7 @@
   "compilerOptions": {
     "allowJs": true,
     "allowSyntheticDefaultImports": true,
-    "resolveJsonModule": true,
-    "noEmit": true
+    "resolveJsonModule": true
   },
   "references": [
     {
@@ -35,12 +34,6 @@
     },
     {
       "path": "packages/base-plugin"
-    },
-    {
-      "path": "packages/schema"
-    },
-    {
-      "path": "packages/types"
     },
     {
       "path": "packages/test-support"
@@ -70,10 +63,10 @@
       "path": "packages/fake-driver"
     },
     {
-      "path": "packages/typedoc-plugin-appium"
+      "path": "packages/strongbox"
     },
     {
-      "path": "packages/doctor"
-    }
+      "path": "packages/logger"
+    },
   ]
 }

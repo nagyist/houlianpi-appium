@@ -30,10 +30,9 @@ async function registerNode(data, addr, port, basePath) {
     try {
       data = JSON.parse(data);
     } catch (err) {
-      logger.errorAndThrow(
+      throw logger.errorWithException(
         `Syntax error in node configuration file ${configFilePath}: ${err.message}`
       );
-      return;
     }
   }
 
@@ -58,13 +57,13 @@ function postRequest(configHolder, addr, port, basePath) {
   // Move Selenium 3 configuration properties to configuration object
   if (!_.has(configHolder, 'configuration')) {
     let configuration = {};
-    for (const property in configHolder) {
+    for (const property in /** @type {import('@appium/types').StringRecord} */ (configHolder)) {
       if (_.has(configHolder, property) && property !== 'capabilities') {
         configuration[property] = configHolder[property];
         delete configHolder[property];
       }
     }
-    configHolder.configuration = configuration;
+    /** @type {import('@appium/types').StringRecord} */ (configHolder).configuration = configuration;
   }
 
   // if the node config does not have the appium/webdriver url, host, and port,

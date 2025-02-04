@@ -1,9 +1,9 @@
-import _ from 'lodash';
+import {util, fs, system} from '@appium/support';
 import B from 'bluebird';
+import _ from 'lodash';
 import path from 'path';
 import resolveFrom from 'resolve-from';
 import {satisfies} from 'semver';
-import {util} from '@appium/support';
 import {commandClasses} from '../cli/extension';
 import {APPIUM_VER} from '../config';
 import log from '../logger';
@@ -12,18 +12,44 @@ import {
   isAllowedSchemaFileExtension,
   registerSchema,
 } from '../schema/schema';
+import { pathToFileURL } from 'url';
 
-const INSTALL_TYPE_NPM = 'npm';
-const INSTALL_TYPE_LOCAL = 'local';
-const INSTALL_TYPE_GITHUB = 'github';
-const INSTALL_TYPE_GIT = 'git';
+const DEFAULT_ENTRY_POINT = 'index.js';
+/**
+ * "npm" install type
+ * Used when extension was installed by npm package name
+ * @remarks _All_ extensions are installed _by_ `npm`, but only this one means the package name was
+ * used to specify it
+ */
+export const INSTALL_TYPE_NPM = 'npm';
+/**
+ * "local" install type
+ * Used when extension was installed from a local path
+ */
+export const INSTALL_TYPE_LOCAL = 'local';
+/**
+ * "github" install type
+ * Used when extension was installed via GitHub URL
+ */
+export const INSTALL_TYPE_GITHUB = 'github';
+/**
+ * "git" install type
+ * Used when extensions was installed via Git URL
+ */
+export const INSTALL_TYPE_GIT = 'git';
+/**
+ * "dev" install type
+ * Used when automatically detected as a working copy
+ */
+export const INSTALL_TYPE_DEV = 'dev';
 
 /** @type {Set<InstallType>} */
-const INSTALL_TYPES = new Set([
+export const INSTALL_TYPES = new Set([
   INSTALL_TYPE_GIT,
   INSTALL_TYPE_GITHUB,
   INSTALL_TYPE_LOCAL,
   INSTALL_TYPE_NPM,
+  INSTALL_TYPE_DEV,
 ]);
 
 /**
@@ -54,7 +80,7 @@ export class ExtensionConfig {
   manifest;
 
   /**
-   * @type {ExtensionListData|undefined}
+   * @type {import('../cli/extension-command').ExtensionList<ExtType>|undefined}
    */
   #listDataCache;
 
@@ -115,7 +141,7 @@ export class ExtensionConfig {
    * @param {ExtName<ExtType>} extName
    * @returns {Promise<string[]>}
    */
-  // eslint-disable-next-line no-unused-vars,require-await
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getConfigWarnings(extManifest, extName) {
     return [];
   }
@@ -239,7 +265,7 @@ export class ExtensionConfig {
    * This is an expensive operation, so the result is cached.  Currently, there is no
    * use case for invalidating the cache.
    * @protected
-   * @returns {Promise<ExtensionListData>}
+   * @returns {Promise<import('../cli/extension-command').ExtensionList<ExtType>>}
    */
   async getListData() {
     if (this.#listDataCache) {
@@ -286,7 +312,9 @@ export class ExtensionConfig {
       const invalidFieldsText = invalidFields.map((field) => `"${field}"`).join(', ');
 
       warnings.push(
-        `${extTypeText} "${extName}" (package \`${pkgName}\`) has ${invalidFieldsEnumerationText} (${invalidFieldsText}) in \`extensions.yaml\`; this may cause upgrades done via the \`appium\` CLI tool to fail. Please reinstall with \`appium ${this.extensionType} uninstall ${extName}\` and \`appium ${this.extensionType} install ${extName}\` to attempt a fix.`
+        `${extTypeText} "${extName}" (package \`${pkgName}\`) has ${invalidFieldsEnumerationText} (${invalidFieldsText}) in \`extensions.yaml\`; ` +
+        `this may cause upgrades done via the \`appium\` CLI tool to fail. Please reinstall with \`appium ${this.extensionType} uninstall ` +
+        `${extName}\` and \`appium ${this.extensionType} install ${extName}\` to attempt a fix.`
       );
     }
 
@@ -300,36 +328,44 @@ export class ExtensionConfig {
 
     if (_.isString(appiumVersion) && !satisfies(APPIUM_VER, appiumVersion)) {
       const listData = await this.getListData();
-      const extListData = /** @type {InstalledExtensionListData} */ (listData[extName]);
+      const extListData =
+        /** @type {import('../cli/extension-command').ExtensionListData<ExtType>} */ (
+          listData[extName]
+        );
       if (extListData?.installed) {
         const {updateVersion, upToDate} = extListData;
-        if (!upToDate) {
+        if (!upToDate && updateVersion) {
           warnings.push(
             createPeerWarning(
-              `its peer dependency on older Appium v${appiumVersion}. Please upgrade \`${pkgName}\` to v${updateVersion} or newer.`
+              `its peer dependency on Appium ${appiumVersion}. Try to upgrade \`${pkgName}\` to v${updateVersion} or newer.`
             )
           );
         } else {
           warnings.push(
             createPeerWarning(
-              `its peer dependency on older Appium v${appiumVersion}. Please ask the developer of \`${pkgName}\` to update the peer dependency on Appium to v${APPIUM_VER}.`
+              `its peer dependency on Appium ${appiumVersion}. Please install a compatible version of the ${_.toLower(extTypeText)}.`
             )
           );
         }
       }
     } else if (!_.isString(appiumVersion)) {
       const listData = await this.getListData();
-      const extListData = /** @type {InstalledExtensionListData} */ (listData[extName]);
+      const extListData =
+        /** @type {import('../cli/extension-command').InstalledExtensionListData<ExtType>} */ (
+          listData[extName]
+        );
       if (!extListData?.upToDate && extListData?.updateVersion) {
         warnings.push(
           createPeerWarning(
-            `an invalid or missing peer dependency on Appium. A newer version of \`${pkgName}\` is available; please attempt to upgrade "${extName}" to v${extListData.updateVersion} or newer.`
+            `an invalid or missing peer dependency on Appium. A newer version of \`${pkgName}\` is available; ` +
+            `please attempt to upgrade "${extName}" to v${extListData.updateVersion} or newer.`
           )
         );
       } else {
         warnings.push(
           createPeerWarning(
-            `an invalid or missing peer dependency on Appium. Please ask the developer of \`${pkgName}\` to add a peer dependency on \`^appium@${APPIUM_VER}\`.`
+            `an invalid or missing peer dependency on Appium. ` +
+            `Please ask the developer of \`${pkgName}\` to add a peer dependency on \`^appium@${APPIUM_VER}\`.`
           )
         );
       }
@@ -391,7 +427,7 @@ export class ExtensionConfig {
    * @param {ExtName<ExtType>} extName - Extension name (from manifest)
    * @returns {ExtManifestProblem[]}
    */
-  // eslint-disable-next-line no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getGenericConfigProblems(extManifest, extName) {
     const {version, pkgName, mainClass} = extManifest;
     const problems = [];
@@ -426,7 +462,7 @@ export class ExtensionConfig {
    * @param {ExtName<ExtType>} extName
    * @returns {ExtManifestProblem[]}
    */
-  // eslint-disable-next-line no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getConfigProblems(extManifest, extName) {
     // shoud override this method if special validation is necessary for this extension type
     return [];
@@ -479,7 +515,7 @@ export class ExtensionConfig {
    * @param {ExtName<ExtType>[]} [activeNames]
    * @returns {void}
    */
-  // eslint-disable-next-line no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   print(activeNames) {
     if (_.isEmpty(this.installedExtensions)) {
       log.info(
@@ -504,7 +540,7 @@ export class ExtensionConfig {
    * @returns {string}
    * @abstract
    */
-  // eslint-disable-next-line no-unused-vars
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   extensionDesc(extName, extManifest) {
     throw new Error('This must be implemented in a subclass');
   }
@@ -524,27 +560,61 @@ export class ExtensionConfig {
   }
 
   /**
-   * Loads extension and returns its main class (constructor)
+   *
    * @param {ExtName<ExtType>} extName
-   * @returns {ExtClass<ExtType>}
+   * @returns {Promise<[string, string]>}
    */
-  require(extName) {
+  async _resolveExtension(extName) {
     const {mainClass} = this.installedExtensions[extName];
-    const reqPath = this.getInstallPath(extName);
-    /** @type {string} */
-    let reqResolved;
+    const moduleRoot = this.getInstallPath(extName);
+    const packageJsonPath = path.join(moduleRoot, 'package.json');
+    let extensionManifest;
     try {
-      reqResolved = require.resolve(reqPath);
-    } catch (err) {
-      throw new ReferenceError(`Could not find a ${this.extensionType} installed at ${reqPath}`);
+      extensionManifest = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+    } catch (e) {
+      throw new ReferenceError(
+        `Could not read the ${this.extensionType} manifest at ${packageJsonPath}: ${e.message}`
+      );
+    }
+    /** @type {string | undefined} */
+    let entryPointRelativePath;
+    try {
+      if (extensionManifest.type === 'module' && extensionManifest.exports) {
+        entryPointRelativePath = resolveEsmEntryPoint(extensionManifest.exports);
+      }
+      entryPointRelativePath = entryPointRelativePath ?? extensionManifest.main ?? DEFAULT_ENTRY_POINT;
+    } catch (e) {
+      throw new ReferenceError(
+        `Could not find the ${this.extensionType} installed at ${moduleRoot}: ${e.message}`
+      );
+    }
+    const entryPointFullPath = path.resolve(moduleRoot, /** @type {string} */ (entryPointRelativePath));
+    if (!await fs.exists(entryPointFullPath)) {
+      throw new ReferenceError(
+        `Cannot find a valid ${this.extensionType} main entry point in '${packageJsonPath}'. ` +
+        `Assumed entry point: '${entryPointFullPath}'`
+      );
     }
     // note: this will only reload the entry point
-    if (process.env.APPIUM_RELOAD_EXTENSIONS && require.cache[reqResolved]) {
-      log.debug(`Removing ${reqResolved} from require cache`);
-      delete require.cache[reqResolved];
+    if (process.env.APPIUM_RELOAD_EXTENSIONS && require.cache[entryPointFullPath]) {
+      log.debug(`Removing ${entryPointFullPath} from require cache`);
+      delete require.cache[entryPointFullPath];
     }
+    return [entryPointFullPath, mainClass];
+  }
+
+  /**
+   * Loads extension asynchronously and returns its main class (constructor)
+   *
+   * @param {ExtName<ExtType>} extName
+   * @returns {Promise<ExtClass<ExtType>>}
+   */
+  async requireAsync(extName) {
+    const [reqPath, mainClass] = await this._resolveExtension(extName);
     log.debug(`Requiring ${this.extensionType} at ${reqPath}`);
-    const MainClass = require(reqPath)[mainClass];
+    // https://github.com/nodejs/node/issues/31710
+    const importPath = system.isWindows() ? pathToFileURL(reqPath).href : reqPath;
+    const MainClass = (await import(importPath))[mainClass];
     if (!MainClass) {
       throw new ReferenceError(
         `Could not find a class named "${mainClass}" exported by ${this.extensionType} "${extName}"`
@@ -619,7 +689,26 @@ export class ExtensionConfig {
   }
 }
 
-export {INSTALL_TYPE_NPM, INSTALL_TYPE_GIT, INSTALL_TYPE_LOCAL, INSTALL_TYPE_GITHUB, INSTALL_TYPES};
+/**
+ * https://nodejs.org/api/packages.html#package-entry-points
+ *
+ * @param {any} exportsValue
+ * @returns {string | undefined}
+ */
+export function resolveEsmEntryPoint(exportsValue) {
+  if (_.isString(exportsValue) && exportsValue) {
+    return exportsValue;
+  }
+  if (!_.isPlainObject(exportsValue)) {
+    return;
+  }
+
+  for (const key of ['.', 'import']) {
+    if (exportsValue[key]) {
+      return resolveEsmEntryPoint(exportsValue[key]);
+    }
+  }
+}
 
 /**
  * An issue with the {@linkcode ExtManifest} for a particular extension.
@@ -640,8 +729,6 @@ export {INSTALL_TYPE_NPM, INSTALL_TYPE_GIT, INSTALL_TYPE_LOCAL, INSTALL_TYPE_GIT
 /**
  * @typedef {import('@appium/types').ExtensionType} ExtensionType
  * @typedef {import('./manifest').Manifest} Manifest
- * @typedef {import('../cli/extension-command').ExtensionListData} ExtensionListData
- * @typedef {import('../cli/extension-command').InstalledExtensionListData} InstalledExtensionListData
  * @typedef {import('appium/types').InstallType} InstallType
  */
 

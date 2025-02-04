@@ -1,4 +1,3 @@
-import chai from 'chai';
 import {
   XML_IOS,
   XML_IOS_TRANSFORMED,
@@ -8,9 +7,12 @@ import {
 } from '../fixtures';
 import {transformAttrs, transformChildNodes, transformSourceXml} from '../../lib/source';
 
-chai.should();
-
 describe('source functions', function () {
+  before(async function () {
+    const chai = await import('chai');
+    chai.should();
+  });
+
   describe('transformSourceXml', function () {
     it('should transform an xml doc based on platform', function () {
       const {

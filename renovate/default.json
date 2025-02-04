@@ -4,10 +4,8 @@
   "extends": [
     "config:js-app",
     "group:definitelyTyped",
-    "helpers:pinGitHubActionDigests",
     "workarounds:typesNodeVersioning",
-    ":automergePatch",
-    ":automergeMinor",
+    ":automergeStableNonMajor",
     ":automergeDigest",
     ":enableVulnerabilityAlerts",
     ":rebaseStalePrs",
@@ -19,16 +17,16 @@
       "matchPackageNames": [
         "@types/wrap-ansi",
         "chalk",
+        "conf",
         "del",
         "delay",
         "env-paths",
         "execa",
         "figures",
-        "find-up",
         "get-port",
+        "get-stream",
         "globby",
         "got",
-        "inquirer",
         "log-symbols",
         "ora",
         "p-retry",
@@ -46,7 +44,7 @@
     },
     {
       "extends": ["packages:eslint"],
-      "matchPackageNames": ["@appium/eslint-config-appium"],
+      "matchPackageNames": ["@appium/eslint-config-appium-ts"],
       "groupName": "ESLint-related packages",
       "groupSlug": "eslint"
     },
@@ -56,12 +54,10 @@
       "groupSlug": "teen_process"
     },
     {
-      "matchPackagePrefixes": ["@appium/"],
-      "excludePackageNames": ["@appium/eslint-config-appium"],
+      "matchPackageNames": ["appium", "@appium/**", "!@appium/eslint-config-appium-ts"],
       "groupName": "Appium-related packages",
       "groupSlug": "appium"
     }
   ],
-  "semanticCommitScope": "{{#if parentDir}}{{parentDir}}{{else}}deps{{/if}}",
-  "transitiveRemediation": true
+  "semanticCommitScope": "{{#if parentDir}}{{parentDir}}{{else}}deps{{/if}}"
 }

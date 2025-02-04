@@ -1,4 +1,3 @@
-/* eslint-disable no-unused-vars */
 import _ from 'lodash';
 import {getBuildInfo, updateBuildInfo, APPIUM_VER} from './config';
 import {
@@ -9,14 +8,25 @@ import {
   CREATE_SESSION_COMMAND,
   DELETE_SESSION_COMMAND,
   GET_STATUS_COMMAND,
+  GET_APPIUM_SESSION_CAPABILITIES_COMMAND,
+  LIST_DRIVER_COMMANDS_COMMAND,
+  LIST_DRIVER_EXTENSIONS_COMMAND,
   promoteAppiumOptions,
   promoteAppiumOptionsForObject,
+  generateDriverLogPrefix,
 } from '@appium/base-driver';
 import AsyncLock from 'async-lock';
-import {parseCapsForInnerDriver, pullSettings} from './utils';
-import {util, node, logger} from '@appium/support';
+import {
+  parseCapsForInnerDriver,
+  pullSettings,
+  makeNonW3cCapsError,
+  validateFeatures,
+} from './utils';
+import {util} from '@appium/support';
 import {getDefaultsForExtension} from './schema';
-import {DRIVER_TYPE} from './constants';
+import {DRIVER_TYPE, BIDI_BASE_PATH} from './constants';
+import * as bidiCommands from './bidi-commands';
+import * as inspectorCommands from './inspector-commands';
 
 const desiredCapabilityConstraints = /** @type {const} */ ({
   automationName: {
@@ -28,15 +38,12 @@ const desiredCapabilityConstraints = /** @type {const} */ ({
     isString: true,
   },
 });
-/**
- * @typedef {typeof desiredCapabilityConstraints} AppiumDriverConstraints
- */
 
 const sessionsListGuard = new AsyncLock();
 const pendingDriversGuard = new AsyncLock();
 
 /**
- * @implements {SessionHandler}
+ * @extends {DriverCore<AppiumDriverConstraints>}
  */
 class AppiumDriver extends DriverCore {
   /**
@@ -45,7 +52,7 @@ class AppiumDriver extends DriverCore {
    * It is not recommended to access this property directly from the outside
    * @type {Record<string,ExternalDriver>}
    */
-  sessions = {};
+  sessions;
 
   /**
    * Access to pending drivers list must be guarded with a Semaphore, because
@@ -53,14 +60,14 @@ class AppiumDriver extends DriverCore {
    * It is not recommended to access this property directly from the outside
    * @type {Record<string,ExternalDriver[]>}
    */
-  pendingDrivers = {};
+  pendingDrivers;
 
   /**
    * Note that {@linkcode AppiumDriver} has no `newCommandTimeout` method.
    * `AppiumDriver` does not set and observe its own timeouts; individual
    * sessions (managed drivers) do instead.
    */
-  newCommandTimeoutMs = 0;
+  newCommandTimeoutMs;
 
   /**
    * List of active plugins
@@ -72,13 +79,13 @@ class AppiumDriver extends DriverCore {
    * map of sessions to actual plugin instances per session
    * @type {Record<string,InstanceType<PluginClass>[]>}
    */
-  sessionPlugins = {};
+  sessionPlugins;
 
   /**
    * some commands are sessionless, so we need a set of plugins for them
    * @type {InstanceType<PluginClass>[]}
    */
-  sessionlessPlugins = [];
+  sessionlessPlugins;
 
   /** @type {DriverConfig} */
   driverConfig;
@@ -86,13 +93,23 @@ class AppiumDriver extends DriverCore {
   /** @type {AppiumServer} */
   server;
 
-  desiredCapConstraints = desiredCapabilityConstraints;
+  /** @type {Record<string, import('ws').WebSocket[]>} */
+  bidiSockets;
 
-  /** @type {DriverOpts} */
+  /** @type {Record<string, import('ws').WebSocket>} */
+  bidiProxyClients;
+
+  /**
+   * @type {AppiumDriverConstraints}
+   * @readonly
+   */
+  desiredCapConstraints;
+
+  /** @type {import('@appium/types').DriverOpts<AppiumDriverConstraints>} */
   args;
 
   /**
-   * @param {DriverOpts} opts
+   * @param {import('@appium/types').DriverOpts<AppiumDriverConstraints>} opts
    */
   constructor(opts) {
     // It is necessary to set `--tmp` here since it should be set to
@@ -106,6 +123,16 @@ class AppiumDriver extends DriverCore {
     super(opts);
 
     this.args = {...opts};
+    this.sessions = {};
+    this.pendingDrivers = {};
+    this.newCommandTimeoutMs = 0;
+    this.pluginClasses = new Map();
+    this.sessionPlugins = {};
+    this.sessionlessPlugins = [];
+    this.bidiSockets = {};
+    this.bidiProxyClients = {};
+    this.desiredCapConstraints = desiredCapabilityConstraints;
+    this._isShuttingDown = false;
 
     // allow this to happen in the background, so no `await`
     (async () => {
@@ -116,17 +143,6 @@ class AppiumDriver extends DriverCore {
         this.log.debug(`Cannot fetch Appium build info: ${e.message}`);
       }
     })();
-  }
-
-  /**
-   * Retrieves logger instance for the current umbrella driver instance
-   */
-  get log() {
-    if (!this._log) {
-      const instanceName = `${this.constructor.name}@${node.getObjectId(this).substring(0, 4)}`;
-      this._log = logger.getLogger(instanceName);
-    }
-    return this._log;
   }
 
   /**
@@ -145,37 +161,68 @@ class AppiumDriver extends DriverCore {
     return this.sessions[sessionId];
   }
 
-  // eslint-disable-next-line require-await
   async getStatus() {
+    // https://www.w3.org/TR/webdriver/#dfn-status
+    const statusObj = this._isShuttingDown
+      ? {
+          ready: false,
+          message: 'The server is shutting down',
+        }
+      : {
+          ready: true,
+          message: 'The server is ready to accept new connections',
+        };
     return {
+      ...statusObj,
       build: _.clone(getBuildInfo()),
     };
   }
 
-  // eslint-disable-next-line require-await
+  /**
+   * @param {string|null} reason An optional shutdown reason
+   */
+  async shutdown(reason = null) {
+    this._isShuttingDown = true;
+    await this.deleteAllSessions({
+      force: true,
+      reason,
+    });
+  }
+
   async getSessions() {
     return _.toPairs(this.sessions).map(([id, driver]) => ({
       id,
-      capabilities: driver.caps,
+      capabilities: /** @type {import('@appium/types').DriverCaps<any>} */ (driver.caps),
     }));
+  }
+
+  async getAppiumSessions () {
+    throw new errors.NotImplementedError('Not implemented yet. ' +
+      'Please check https://github.com/appium/appium/issues/20880 for more details.');
+  }
+
+  async getAppiumSessionCapabilities () {
+    throw new errors.NotImplementedError('TODO: Implement this method body to call getAppiumSessionCapabilities ' +
+      'from the destination driver instance in a session.'
+    );
   }
 
   printNewSessionAnnouncement(driverName, driverVersion, driverBaseVersion) {
     this.log.info(
       driverVersion
         ? `Appium v${APPIUM_VER} creating new ${driverName} (v${driverVersion}) session`
-        : `Appium v${APPIUM_VER} creating new ${driverName} session`
+        : `Appium v${APPIUM_VER} creating new ${driverName} session`,
     );
     this.log.info(`Checking BaseDriver versions for Appium and ${driverName}`);
     this.log.info(
       AppiumDriver.baseVersion
         ? `Appium's BaseDriver version is ${AppiumDriver.baseVersion}`
-        : `Could not determine Appium's BaseDriver version`
+        : `Could not determine Appium's BaseDriver version`,
     );
     this.log.info(
       driverBaseVersion
         ? `${driverName}'s BaseDriver version is ${driverBaseVersion}`
-        : `Could not determine ${driverName}'s BaseDriver version`
+        : `Could not determine ${driverName}'s BaseDriver version`,
     );
   }
 
@@ -213,17 +260,23 @@ class AppiumDriver extends DriverCore {
 
   /**
    * Create a new session
-   * @param {W3CCapabilities<AppiumDriverConstraints>} jsonwpCaps JSONWP formatted desired capabilities
-   * @param {W3CCapabilities<AppiumDriverConstraints>} reqCaps Required capabilities (JSONWP standard)
-   * @param {W3CCapabilities<AppiumDriverConstraints>} w3cCapabilities W3C capabilities
-   * @param {DriverData[]} [driverData]
+   * @param {W3CAppiumDriverCaps} jsonwpCaps JSONWP formatted desired capabilities
+   * @param {W3CAppiumDriverCaps} [reqCaps] Required capabilities (JSONWP standard)
+   * @param {W3CAppiumDriverCaps} [w3cCapabilities] W3C capabilities
+   * @returns {Promise<SessionHandlerCreateResult>}
    */
-  async createSession(jsonwpCaps, reqCaps, w3cCapabilities, driverData) {
+  async createSession(jsonwpCaps, reqCaps, w3cCapabilities) {
     const defaultCapabilities = _.cloneDeep(this.args.defaultCapabilities);
     const defaultSettings = pullSettings(defaultCapabilities);
     jsonwpCaps = _.cloneDeep(jsonwpCaps);
     const jwpSettings = {...defaultSettings, ...pullSettings(jsonwpCaps)};
     w3cCapabilities = _.cloneDeep(w3cCapabilities);
+    if (
+      !_.isPlainObject(w3cCapabilities) ||
+      !(_.isArray(w3cCapabilities?.firstMatch) || _.isPlainObject(w3cCapabilities?.alwaysMatch))
+    ) {
+      throw makeNonW3cCapsError();
+    }
     // It is possible that the client only provides caps using JSONWP standard,
     // although firstMatch/alwaysMatch properties are still present.
     // In such case we assume the client understands W3C protocol and merge the given
@@ -236,15 +289,16 @@ class AppiumDriver extends DriverCore {
       Object.assign(w3cSettings, pullSettings(firstMatchEntry));
     }
 
+    /** @type {string|undefined} */
     let protocol;
     let innerSessionId, dCaps;
     try {
       // Parse the caps into a format that the InnerDriver will accept
       const parsedCaps = parseCapsForInnerDriver(
         jsonwpCaps,
-        promoteAppiumOptions(w3cCapabilities),
+        promoteAppiumOptions(/** @type {W3CAppiumDriverCaps} */ (w3cCapabilities)),
         this.desiredCapConstraints,
-        defaultCapabilities ? promoteAppiumOptionsForObject(defaultCapabilities) : undefined
+        defaultCapabilities ? promoteAppiumOptionsForObject(defaultCapabilities) : undefined,
       );
 
       const {desiredCaps, processedJsonwpCapabilities, processedW3CCapabilities} =
@@ -262,7 +316,7 @@ class AppiumDriver extends DriverCore {
         driver: InnerDriver,
         version: driverVersion,
         driverName,
-      } = this.driverConfig.findMatchingDriver(desiredCaps);
+      } = await this.driverConfig.findMatchingDriver(desiredCaps);
       this.printNewSessionAnnouncement(InnerDriver.name, driverVersion, InnerDriver.baseVersion);
 
       if (this.args.sessionOverride) {
@@ -278,7 +332,7 @@ class AppiumDriver extends DriverCore {
        */
       let otherPendingDriversData = [];
 
-      const driverInstance = new InnerDriver(this.args, true);
+      const driverInstance = /** @type {ExternalDriver} */ (new InnerDriver(this.args, true));
 
       // We want to assign security values directly on the driver. The driver
       // should not read security values from `this.opts` because those values
@@ -288,21 +342,28 @@ class AppiumDriver extends DriverCore {
         this.log.info(
           `Applying relaxed security to '${InnerDriver.name}' as per ` +
             `server command line argument. All insecure features will be ` +
-            `enabled unless explicitly disabled by --deny-insecure`
+            `enabled unless explicitly disabled by --deny-insecure`,
         );
         driverInstance.relaxedSecurityEnabled = true;
+      }
+
+      // We also want to assign any new Bidi Commands that the driver has specified, including all
+      // the standard bidi commands. But add a method existence guard since some old driver class
+      // instances might not have this method
+      if (_.isFunction(driverInstance.updateBidiCommands)) {
+        driverInstance.updateBidiCommands(InnerDriver.newBidiCommands ?? {});
       }
 
       if (!_.isEmpty(this.args.denyInsecure)) {
         this.log.info('Explicitly preventing use of insecure features:');
         this.args.denyInsecure.map((a) => this.log.info(`    ${a}`));
-        driverInstance.denyInsecure = this.args.denyInsecure;
+        driverInstance.denyInsecure = validateFeatures(this.args.denyInsecure);
       }
 
       if (!_.isEmpty(this.args.allowInsecure)) {
         this.log.info('Explicitly enabling use of insecure features:');
         this.args.allowInsecure.map((a) => this.log.info(`    ${a}`));
-        driverInstance.allowInsecure = this.args.allowInsecure;
+        driverInstance.allowInsecure = validateFeatures(this.args.allowInsecure);
       }
 
       // Likewise, any driver-specific CLI args that were passed in should be assigned directly to
@@ -329,7 +390,7 @@ class AppiumDriver extends DriverCore {
       await pendingDriversGuard.acquire(AppiumDriver.name, () => {
         this.pendingDrivers[InnerDriver.name] = this.pendingDrivers[InnerDriver.name] || [];
         otherPendingDriversData = _.compact(
-          this.pendingDrivers[InnerDriver.name].map((drv) => drv.driverData)
+          this.pendingDrivers[InnerDriver.name].map((drv) => drv.driverData),
         );
         this.pendingDrivers[InnerDriver.name].push(driverInstance);
       });
@@ -339,7 +400,7 @@ class AppiumDriver extends DriverCore {
           processedJsonwpCapabilities,
           reqCaps,
           processedW3CCapabilities,
-          [...runningDriversData, ...otherPendingDriversData]
+          [...runningDriversData, ...otherPendingDriversData],
         );
         protocol = driverInstance.protocol;
         this.sessions[innerSessionId] = driverInstance;
@@ -353,7 +414,7 @@ class AppiumDriver extends DriverCore {
 
       this.log.info(
         `New ${InnerDriver.name} session created successfully, session ` +
-          `${innerSessionId} added to master session list`
+          `${innerSessionId} added to master session list`,
       );
 
       // set the New Command Timeout for the inner driver
@@ -363,15 +424,33 @@ class AppiumDriver extends DriverCore {
       if (driverInstance.isW3CProtocol() && !_.isEmpty(w3cSettings)) {
         this.log.info(
           `Applying the initial values to Appium settings parsed from W3C caps: ` +
-            JSON.stringify(w3cSettings)
+            JSON.stringify(w3cSettings),
         );
         await driverInstance.updateSettings(w3cSettings);
       } else if (driverInstance.isMjsonwpProtocol() && !_.isEmpty(jwpSettings)) {
         this.log.info(
           `Applying the initial values to Appium settings parsed from MJSONWP caps: ` +
-            JSON.stringify(jwpSettings)
+            JSON.stringify(jwpSettings),
         );
         await driverInstance.updateSettings(jwpSettings);
+      }
+
+      // if the user has asked for bidi support, send our bidi url back to the user. The inner
+      // driver will need to have already saved any internal bidi urls it might want to proxy to,
+      // cause we are going to overwrite that information here!
+      if (dCaps.webSocketUrl) {
+        const {address, port, basePath} = this.args;
+        const scheme = `ws${this.server.isSecure() ? 's' : ''}`;
+        const host = bidiCommands.determineBiDiHost(address);
+        const bidiUrl = `${scheme}://${host}:${port}${basePath}${BIDI_BASE_PATH}/${innerSessionId}`;
+        this.log.info(
+          `Upstream driver responded with webSocketUrl ${dCaps.webSocketUrl}, will rewrite to ` +
+          `${bidiUrl} for response to client`
+        );
+        // @ts-ignore webSocketUrl gets sent by the client as a boolean, but then it is supposed
+        // to come back from the server as a string. TODO figure out how to express this in our
+        // capability constraint system
+        dCaps.webSocketUrl = bidiUrl;
       }
     } catch (error) {
       return {
@@ -388,7 +467,7 @@ class AppiumDriver extends DriverCore {
 
   /**
    *
-   * @param {Driver} driver
+   * @param {ExternalDriver} driver
    * @param {string} innerSessionId
    */
   attachUnexpectedShutdownHandler(driver, innerSessionId) {
@@ -399,13 +478,13 @@ class AppiumDriver extends DriverCore {
         for (const plugin of this.sessionPlugins[innerSessionId]) {
           if (_.isFunction(plugin.onUnexpectedShutdown)) {
             this.log.debug(
-              `Plugin ${plugin.name} defines an unexpected shutdown handler; calling it now`
+              `Plugin ${plugin.name} defines an unexpected shutdown handler; calling it now`,
             );
             try {
               plugin.onUnexpectedShutdown(driver, cause);
             } catch (e) {
               this.log.warn(
-                `Got an error when running plugin ${plugin.name} shutdown handler: ${e}`
+                `Got an error when running plugin ${plugin.name} shutdown handler: ${e}`,
               );
             }
           } else {
@@ -424,28 +503,29 @@ class AppiumDriver extends DriverCore {
     } else {
       this.log.warn(
         `Failed to attach the unexpected shutdown listener. ` +
-          `Is 'onUnexpectedShutdown' method available for '${driver.constructor.name}'?`
+          `Is 'onUnexpectedShutdown' method available for '${driver.constructor.name}'?`,
       );
     }
   }
 
   /**
    *
-   * @param {DriverClass} InnerDriver
+   * @param {((...args: any[]) => any)|(new(...args: any[]) => any)} InnerDriver
    * @returns {Promise<DriverData[]>}}
+   * @privateRemarks The _intent_ is that `InnerDriver` is the class of a driver, but it only really
+   * needs to be a function or constructor.
    */
-  // eslint-disable-next-line require-await
   async curSessionDataForDriver(InnerDriver) {
     const data = _.compact(
       _.values(this.sessions)
         .filter((s) => s.constructor.name === InnerDriver.name)
-        .map((s) => s.driverData)
+        .map((s) => s.driverData),
     );
     for (const datum of data) {
       if (!datum) {
         throw new Error(
           `Problem getting session data for driver type ` +
-            `${InnerDriver.name}; does it implement 'get driverData'?`
+            `${InnerDriver.name}; does it implement 'get driverData'?`,
         );
       }
     }
@@ -466,7 +546,7 @@ class AppiumDriver extends DriverCore {
         const curConstructorName = this.sessions[sessionId].constructor.name;
         otherSessionsData = _.toPairs(this.sessions)
           .filter(
-            ([key, value]) => value.constructor.name === curConstructorName && key !== sessionId
+            ([key, value]) => value.constructor.name === curConstructorName && key !== sessionId,
           )
           .map(([, value]) => value.driverData);
         const dstSession = this.sessions[sessionId];
@@ -477,6 +557,9 @@ class AppiumDriver extends DriverCore {
         // be in otherwise
         delete this.sessions[sessionId];
         delete this.sessionPlugins[sessionId];
+
+        this.cleanupBidiSockets(sessionId);
+
         return dstSession;
       });
       // this may not be correct, but if `dstSession` was falsy, the call to `deleteSession()` would
@@ -508,7 +591,7 @@ class AppiumDriver extends DriverCore {
     this.log.debug(`Cleaning up ${util.pluralize('active session', sessionsCount, true)}`);
     const cleanupPromises = force
       ? _.values(this.sessions).map((drv) =>
-          drv.startUnexpectedShutdown(reason && new Error(reason))
+          drv.startUnexpectedShutdown(reason && new Error(reason)),
         )
       : _.keys(this.sessions).map((id) => this.deleteSession(id));
     for (const cleanupPromise of cleanupPromises) {
@@ -524,12 +607,13 @@ class AppiumDriver extends DriverCore {
    * Get the appropriate plugins for a session (or sessionless plugins)
    *
    * @param {?string} sessionId - the sessionId (or null) to use to find plugins
-   * @returns {Array} - array of plugin instances
+   * @returns {Array<import('@appium/types').Plugin>} - array of plugin instances
    */
   pluginsForSession(sessionId = null) {
     if (sessionId) {
       if (!this.sessionPlugins[sessionId]) {
-        this.sessionPlugins[sessionId] = this.createPluginInstances();
+        const driverId = generateDriverLogPrefix(this.sessions[sessionId]);
+        this.sessionPlugins[sessionId] = this.createPluginInstances(driverId || null);
       }
       return this.sessionPlugins[sessionId];
     }
@@ -554,20 +638,25 @@ class AppiumDriver extends DriverCore {
     // to handle a given command, a plugin should either implement that command as a plugin
     // instance method or it should implement a generic 'handle' method
     return this.pluginsForSession(sessionId).filter(
-      (p) => _.isFunction(p[cmd]) || _.isFunction(p.handle)
+      (p) => _.isFunction(p[cmd]) || _.isFunction(p.handle),
     );
   }
 
   /**
    * Creates instances of all of the enabled Plugin classes
+   * @param {string|null} driverId - ID to use for linking a driver to a plugin in logs
    * @returns {Plugin[]}
    */
-  createPluginInstances() {
+  createPluginInstances(driverId = null) {
     /** @type {Plugin[]} */
     const pluginInstances = [];
     for (const [PluginClass, name] of this.pluginClasses.entries()) {
       const cliArgs = this.getCliArgsForPlugin(name);
-      const plugin = new PluginClass(name, cliArgs);
+      const plugin = new PluginClass(name, cliArgs, driverId);
+      if (_.isFunction(/** @type {Plugin & ExtensionCore} */(plugin).updateBidiCommands)) {
+        // some old plugin classes don't have `updateBidiCommands`
+        /** @type {Plugin & ExtensionCore} */(plugin).updateBidiCommands(PluginClass.newBidiCommands ?? {});
+      }
       pluginInstances.push(plugin);
     }
     return pluginInstances;
@@ -577,7 +666,7 @@ class AppiumDriver extends DriverCore {
    *
    * @param {string} cmd
    * @param  {...any} args
-   * @returns {Promise<{value: any, error?: Error, protocol: string} | import('type-fest').AsyncReturnType<Driver['executeCommand']>>}
+   * @returns {Promise<{value: any, error?: Error, protocol: string} | import('type-fest').AsyncReturnType<ExternalDriver['executeCommand']>>}
    */
   async executeCommand(cmd, ...args) {
     // We have basically three cases for how to handle commands:
@@ -607,6 +696,7 @@ class AppiumDriver extends DriverCore {
     let dstSession = null;
     let protocol = null;
     /** @type {this | ExternalDriver} */
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     let driver = this;
     if (isSessionCmd) {
       sessionId = _.last(args);
@@ -624,6 +714,16 @@ class AppiumDriver extends DriverCore {
     // get any plugins which are registered as handling this command
     const plugins = this.pluginsToHandleCmd(cmd, sessionId);
 
+    // if any plugins are going to handle this command, we can't guarantee that the default
+    // driver's executeCommand method will be called, which means we can't guarantee that the
+    // newCommandTimeout will be cleared. So we do it here as well.
+    if (plugins.length && dstSession) {
+      this.log.debug(
+        'Clearing new command timeout pre-emptively since plugin(s) will handle this command',
+      );
+      await dstSession.clearNewCommandTimeout();
+    }
+
     // now we define a 'cmdHandledBy' object which will keep track of which plugins have handled this
     // command. we care about this because (a) multiple plugins can handle the same command, and
     // (b) there's no guarantee that a plugin will actually call the next() method which runs the
@@ -640,7 +740,9 @@ class AppiumDriver extends DriverCore {
       // if we're running with plugins, make sure we log that the default behavior is actually
       // happening so we can tell when the plugin call chain is unwrapping to the default behavior
       // if that's what happens
-      plugins.length && this.log.info(`Executing default handling behavior for command '${cmd}'`);
+      if (plugins.length) {
+        this.log.info(`Executing default handling behavior for command '${cmd}'`);
+      }
 
       // if we make it here, we know that the default behavior is handled
       cmdHandledBy.default = true;
@@ -650,13 +752,13 @@ class AppiumDriver extends DriverCore {
         // is to do the proxy and retrieve the result internally so it can be passed to the plugin
         // in case it calls 'await next()'. This requires that the driver have defined
         // 'proxyCommand' and not just 'proxyReqRes'.
-        if (!dstSession.proxyCommand) {
+        if (!dstSession?.proxyCommand) {
           throw new NoDriverProxyCommandError();
         }
         return await dstSession.proxyCommand(
           reqForProxy.originalUrl,
           reqForProxy.method,
-          reqForProxy.body
+          reqForProxy.body,
         );
       }
 
@@ -671,7 +773,7 @@ class AppiumDriver extends DriverCore {
       }
 
       // here we know that we are executing a session command, and have a valid session driver
-      return await dstSession.executeCommand(cmd, ...args);
+      return await /** @type {any} */ (dstSession).executeCommand(cmd, ...args);
     };
 
     // now take our default behavior, wrap it with any number of plugin behaviors, and run it
@@ -689,6 +791,22 @@ class AppiumDriver extends DriverCore {
     // handling the command and which didn't
     this.logPluginHandlerReport(plugins, {cmd, cmdHandledBy});
 
+    // if we had plugins, and if they did not ultimately call the default handler, this means our
+    // new command timeout was not restarted by the default handler's executeCommand call, so
+    // restart it here using the same logic as in BaseDriver's executeCommand
+    if (
+      dstSession &&
+      !cmdHandledBy.default &&
+      dstSession.isCommandsQueueEnabled &&
+      cmd !== DELETE_SESSION_COMMAND
+    ) {
+      this.log.debug(
+        'Restarting new command timeout via umbrella driver since plugin did not ' +
+          'allow default handler to execute',
+      );
+      await dstSession.startNewCommandTimeout();
+    }
+
     // And finally, if the command was createSession, we want to migrate any plugins which were
     // previously sessionless to use the new sessionId, so that plugins can share state between
     // their createSession method and other instance methods
@@ -696,9 +814,15 @@ class AppiumDriver extends DriverCore {
       const sessionId = _.first(res.value);
       this.log.info(
         `Promoting ${this.sessionlessPlugins.length} sessionless plugins to be attached ` +
-          `to session ID ${sessionId}`
+          `to session ID ${sessionId}`,
       );
       this.sessionPlugins[sessionId] = this.sessionlessPlugins;
+      for (const p of /** @type {(Plugin & ExtensionCore)[]} */(this.sessionPlugins[sessionId])) {
+        if (_.isFunction(p.updateLogPrefix)) {
+          // some old plugin classes don't have `updateLogPrefix` yet
+          p.updateLogPrefix(`${generateDriverLogPrefix(p)} <${generateDriverLogPrefix(this.sessions[sessionId])}>`);
+        }
+      }
       this.sessionlessPlugins = [];
     }
 
@@ -706,8 +830,9 @@ class AppiumDriver extends DriverCore {
   }
 
   wrapCommandWithPlugins({driver, cmd, args, next, cmdHandledBy, plugins}) {
-    plugins.length &&
+    if (plugins.length) {
       this.log.info(`Plugins which can handle cmd '${cmd}': ${plugins.map((p) => p.name)}`);
+    }
 
     // now we can go through each plugin and wrap `next` around its own handler, passing the *old*
     // next in so that it can call it if it wants to
@@ -748,7 +873,7 @@ class AppiumDriver extends DriverCore {
       this.log.info(
         `Command '${cmd}' was *not* handled by the following behaviours or plugins, even ` +
           `though they were registered to handle it: ${JSON.stringify(didntHandle)}. The ` +
-          `command *was* handled by these: ${JSON.stringify(didHandle)}.`
+          `command *was* handled by these: ${JSON.stringify(didHandle)}.`,
       );
     }
   }
@@ -798,12 +923,30 @@ class AppiumDriver extends DriverCore {
     const dstSession = this.sessions[sessionId];
     return dstSession && dstSession.canProxy(sessionId);
   }
+
+  onBidiConnection = bidiCommands.onBidiConnection;
+  onBidiMessage = bidiCommands.onBidiMessage;
+  onBidiServerError = bidiCommands.onBidiServerError;
+  cleanupBidiSockets = bidiCommands.cleanupBidiSockets;
+
+  listCommands = inspectorCommands.listCommands;
+  listExtensions = inspectorCommands.listExtensions;
 }
 
-// help decide which commands should be proxied to sub-drivers and which
-// should be handled by this, our umbrella driver
+/**
+ * Help decide which commands should be proxied to sub-drivers and which
+ * should be handled by this, our umbrella driver
+ * @param {string} cmd
+ * @returns {boolean}
+ */
 function isAppiumDriverCommand(cmd) {
-  return !isSessionCommand(cmd) || cmd === DELETE_SESSION_COMMAND;
+  return !isSessionCommand(cmd)
+    || _.includes([
+      DELETE_SESSION_COMMAND,
+      LIST_DRIVER_COMMANDS_COMMAND,
+      LIST_DRIVER_EXTENSIONS_COMMAND,
+      GET_APPIUM_SESSION_CAPABILITIES_COMMAND
+    ], cmd);
 }
 
 /**
@@ -821,7 +964,7 @@ export class NoDriverProxyCommandError extends Error {
       `The default behavior for this command was to proxy, but the driver ` +
         `did not have the 'proxyCommand' method defined. To fully support ` +
         `plugins, drivers should have 'proxyCommand' set to a jwpProxy object's ` +
-        `'command()' method, in addition to the normal 'proxyReqRes'`
+        `'command()' method, in addition to the normal 'proxyReqRes'`,
     );
   }
 }
@@ -829,21 +972,39 @@ export class NoDriverProxyCommandError extends Error {
 export {AppiumDriver};
 
 /**
- * @typedef {import('@appium/types').ExternalDriver} ExternalDriver
- * @typedef {import('@appium/types').Driver} Driver
- * @typedef {import('@appium/types').DriverClass} DriverClass
  * @typedef {import('@appium/types').DriverData} DriverData
  * @typedef {import('@appium/types').ServerArgs} DriverOpts
  * @typedef {import('@appium/types').Constraints} Constraints
  * @typedef {import('@appium/types').AppiumServer} AppiumServer
  * @typedef {import('@appium/types').ExtensionType} ExtensionType
  * @typedef {import('./extension/driver-config').DriverConfig} DriverConfig
- * @typedef {import('@appium/types').Plugin} Plugin
- * @typedef {import('@appium/types').PluginClass} PluginClass
  * @typedef {import('@appium/types').PluginType} PluginType
  * @typedef {import('@appium/types').DriverType} DriverType
  * @typedef {import('@appium/types').StringRecord} StringRecord
- * @typedef {import('@appium/types').SessionHandler<SessionHandlerResult<any[]>,SessionHandlerResult<void>>} SessionHandler
+ * @typedef {import('@appium/types').ExternalDriver} ExternalDriver
+ * @typedef {import('@appium/types').PluginClass} PluginClass
+ * @typedef {import('@appium/types').Plugin} Plugin
+ * @typedef {import('@appium/base-driver').ExtensionCore} ExtensionCore
+ * @typedef {import('@appium/types').DriverClass<import('@appium/types').Driver>} DriverClass
+ */
+
+/**
+ * @typedef {import('@appium/types').ISessionHandler<AppiumDriverConstraints,
+ * SessionHandlerCreateResult, SessionHandlerDeleteResult>} AppiumSessionHandler
+ */
+
+/**
+ * @typedef {SessionHandlerResult<[innerSessionId: string, caps:
+ * import('@appium/types').DriverCaps<Constraints>, protocol: string|undefined]>} SessionHandlerCreateResult
+ */
+
+/**
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').Core<C>} Core
+ */
+
+/**
+ * @typedef {SessionHandlerResult<void>} SessionHandlerDeleteResult
  */
 
 /**
@@ -857,11 +1018,6 @@ export {AppiumDriver};
  */
 
 /**
- * @template {Constraints} C
- * @typedef {import('@appium/types').W3CCapabilities<C>} W3CCapabilities
- */
-
-/**
- * @template {Constraints} C
- * @typedef {import('@appium/types').Capabilities<C>} Capabilities
+ * @typedef {typeof desiredCapabilityConstraints} AppiumDriverConstraints
+ * @typedef {import('@appium/types').W3CDriverCaps<AppiumDriverConstraints>} W3CAppiumDriverCaps
  */

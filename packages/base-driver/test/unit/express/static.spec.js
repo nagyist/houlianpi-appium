@@ -1,10 +1,14 @@
-// transpile:mocha
-
 import {welcome} from '../../../lib/express/static';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 
 describe('welcome', function () {
   let sandbox;
+
+  before(async function () {
+    const chai = await import('chai');
+    chai.should();
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();

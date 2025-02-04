@@ -1,10 +1,17 @@
 import path from 'path';
-import {plist, tempDir, fs} from '../../lib/index.js';
+import {plist, tempDir, fs} from '../../lib';
 
 const binaryPlistPath = path.join(__dirname, 'assets', 'sample_binary.plist');
 const textPlistPath = path.join(__dirname, 'assets', 'sample_text.plist');
 
 describe('plist', function () {
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
+
   it('should parse plist file as binary', async function () {
     let content = await plist.parsePlistFile(binaryPlistPath);
     content.should.have.property(

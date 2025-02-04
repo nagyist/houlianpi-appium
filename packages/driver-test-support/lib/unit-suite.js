@@ -1,32 +1,42 @@
 import _ from 'lodash';
 import B from 'bluebird';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
-
-import chai from 'chai';
-
-const should = chai.should();
-const {expect} = chai;
 
 // wrap these tests in a function so we can export the tests and re-use them
 // for actual driver implementations
 
 /**
  * Creates unit test suites for a driver.
- * @param {DriverClass} DriverClass
- * @param {Partial<BaseNSCapabilities>} [defaultCaps]
+ * @template {Constraints} C
+ * @param {DriverClass<C>} DriverClass
+ * @param {import('@appium/types').NSDriverCaps<C>} [defaultCaps]
  */
 
-export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
+export function driverUnitTestSuite(
+  DriverClass,
+  defaultCaps = /** @type {import('@appium/types').NSDriverCaps<C>} */ ({})
+) {
   // to display the driver under test in report
   const className = DriverClass.name ?? '(unknown driver)';
 
   describe(`BaseDriver unit suite (as ${className})`, function () {
     /** @type {InstanceType<typeof DriverClass>} */
     let d;
-    /** @type {W3CCapabilities} */
+    /** @type {import('@appium/types').W3CDriverCaps<C>} */
     let w3cCaps;
     /** @type {import('sinon').SinonSandbox} */
     let sandbox;
+    let expect;
+    let should;
+
+    before(async function () {
+      const chai = await import('chai');
+      const chaiAsPromised = await import('chai-as-promised');
+      chai.use(chaiAsPromised.default);
+      expect = chai.expect;
+      should = chai.should();
+    });
 
     beforeEach(function () {
       sandbox = createSandbox();
@@ -41,8 +51,8 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
       };
     });
     afterEach(async function () {
-      sandbox.restore();
-      await d.deleteSession();
+      sandbox?.restore();
+      await d?.deleteSession();
     });
 
     describe('static property', function () {
@@ -50,23 +60,6 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
         it('should exist', function () {
           DriverClass.baseVersion.should.exist;
         });
-      });
-    });
-
-    describe('Log prefix', function () {
-      it('should setup log prefix', async function () {
-        const d = new DriverClass();
-        const previousPrefix = d.log.prefix;
-        await d.createSession({
-          alwaysMatch: {...defaultCaps, platformName: 'Fake', 'appium:deviceName': 'Commodore 64'},
-          firstMatch: [{}],
-        });
-        try {
-          expect(previousPrefix).not.to.eql(d.log.prefix);
-        } finally {
-          await d.deleteSession();
-          expect(previousPrefix).to.eql(d.log.prefix);
-        }
       });
     });
 
@@ -229,7 +222,7 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
     });
 
     describe('command queue', function () {
-      /** @type {InstanceType<DriverClass>} */
+      /** @type {InstanceType<DriverClass<Constraints>>} */
       let d;
       let waitMs = 10;
 
@@ -274,7 +267,7 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
           }
         }
         let results = /** @type {PromiseFulfilledResult<any>[]} */ (
-          // eslint-disable-next-line promise/no-native
+
           await Promise.allSettled(cmds)
         );
         for (let i = 1; i < 5; i++) {
@@ -531,11 +524,11 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
             d.logEvent('commands');
           }).should.throw();
           (() => {
-            // @ts-expect-error
+            // @ts-expect-error - bad type
             d.logEvent(1);
           }).should.throw();
           (() => {
-            // @ts-expect-error
+            // @ts-expect-error - bad type
             d.logEvent({});
           }).should.throw();
         });
@@ -588,24 +581,9 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
       d = new DriverClass();
     });
 
-    it('should say a feature is enabled when it is explicitly allowed', function () {
-      d.allowInsecure = ['foo', 'bar'];
+    it('should handled with wild card if feature name is invalid', function () {
+      d.allowInsecure = ['foo'];
       d.isFeatureEnabled('foo').should.be.true;
-      d.isFeatureEnabled('bar').should.be.true;
-      d.isFeatureEnabled('baz').should.be.false;
-    });
-
-    it('should say a feature is not enabled if it is not enabled', function () {
-      d.allowInsecure = [];
-      d.isFeatureEnabled('foo').should.be.false;
-    });
-
-    it('should prefer denyInsecure to allowInsecure', function () {
-      d.allowInsecure = ['foo', 'bar'];
-      d.denyInsecure = ['foo'];
-      d.isFeatureEnabled('foo').should.be.false;
-      d.isFeatureEnabled('bar').should.be.true;
-      d.isFeatureEnabled('baz').should.be.false;
     });
 
     it('should allow global setting for insecurity', function () {
@@ -617,21 +595,55 @@ export function driverUnitTestSuite(DriverClass, defaultCaps = {}) {
 
     it('global setting should be overrideable', function () {
       d.relaxedSecurityEnabled = true;
-      d.denyInsecure = ['foo', 'bar'];
+      d.denyInsecure = ['*:foo', '*:bar'];
       d.isFeatureEnabled('foo').should.be.false;
       d.isFeatureEnabled('bar').should.be.false;
       d.isFeatureEnabled('baz').should.be.true;
+    });
+
+    it('should say a feature is enabled if it is for this driver', function () {
+      d.opts.automationName = 'bar';
+      d.allowInsecure = ['bar:foo'];
+      d.isFeatureEnabled('foo').should.be.true;
+    });
+
+    it('should say a feature is enabled if it is for all drivers', function () {
+      d.opts.automationName = 'bar';
+      d.allowInsecure = ['*:foo'];
+      d.isFeatureEnabled('foo').should.be.true;
+    });
+
+    it('should say a feature is not enabled if it is not for this driver', function () {
+      d.opts.automationName = 'bar';
+      d.allowInsecure = ['baz:foo'];
+      d.isFeatureEnabled('foo').should.be.false;
+    });
+
+    it('should say a feature is not enabled if it is enabled and then disabled', function () {
+      d.opts.automationName = 'bar';
+      d.allowInsecure = ['bar:foo'];
+      d.denyInsecure = ['*:foo'];
+      d.isFeatureEnabled('foo').should.be.false;
     });
   });
 }
 
 /**
- * @typedef {import('@appium/types').DriverClass} DriverClass
  * @typedef {import('@appium/types').BaseNSCapabilities} BaseNSCapabilities
+ * @typedef {import('@appium/types').Constraints} Constraints
  */
 
 /**
- * @template {import('@appium/types').Constraints} [C=import('@appium/types').BaseDriverCapConstraints]
- * @template {import('@appium/types').StringRecord|void} [Extra=void]
- * @typedef {import('@appium/types').W3CCapabilities<C, Extra>} W3CCapabilities
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').DriverClass<Driver<C>>} DriverClass
+ */
+
+/**
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').Driver<C>} Driver
+ */
+
+/**
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').W3CCapabilities<C>} W3CCapabilities
  */

@@ -1,4 +1,5 @@
 import {init as logsinkInit, clear as logsinkClear} from '../../lib/logsink';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {logger} from '@appium/support';
 
@@ -11,7 +12,12 @@ describe('logging', function () {
   let sandbox;
   let stderrSpy;
   let stdoutSpy;
-  beforeEach(function () {
+  beforeEach(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+
     sandbox = createSandbox();
     stderrSpy = sandbox.spy(process.stderr, 'write');
     stdoutSpy = sandbox.spy(process.stdout, 'write');

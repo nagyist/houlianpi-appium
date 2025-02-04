@@ -2,6 +2,7 @@
 
 import {server, routeConfiguringFunction} from '../../../lib';
 import {configureServer, normalizeBasePath} from '../../../lib/express/server';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {getTestPort} from '@appium/driver-test-support';
 
@@ -23,8 +24,17 @@ function fakeDriver() {
 
 describe('server configuration', function () {
   let port;
-
   let sandbox;
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+
+    port = await getTestPort(true);
+  });
 
   function fakeApp() {
     const app = {
@@ -43,10 +53,6 @@ describe('server configuration', function () {
     return app;
   }
 
-  before(async function () {
-    port = await getTestPort(true);
-  });
-
   beforeEach(function () {
     sandbox = createSandbox();
   });
@@ -59,7 +65,7 @@ describe('server configuration', function () {
     const app = fakeApp();
     const configureRoutes = () => {};
     configureServer({app, addRoutes: configureRoutes});
-    app.use.callCount.should.equal(14);
+    app.use.callCount.should.equal(16);
     app.all.callCount.should.equal(4);
   });
 

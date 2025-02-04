@@ -2,13 +2,14 @@ import {fs} from 'appium/support';
 import {readFileSync} from 'fs';
 import path from 'path';
 import XMLDom from '@xmldom/xmldom';
-import xpath from 'xpath';
+import * as xpath from 'xpath';
 import log from './logger';
+import _ from 'lodash';
 import {FakeElement} from './fake-element';
 
 const SCREENSHOT = path.join(__dirname, 'screen.png');
 
-class FakeApp {
+export class FakeApp {
   constructor() {
     this.dom = null;
     this.activeDom = null;
@@ -20,13 +21,15 @@ class FakeApp {
     this._width = null;
     this._height = null;
     this.rawXml = '';
+    /** @type {import('./driver').Orientation} */
     this.currentOrientation = 'PORTRAIT';
+    /** @type {import('@appium/types').ActionSequence[][]} */
     this.actionLog = [];
   }
 
   get title() {
     let nodes = this.xpathQuery('//title');
-    if (nodes.length < 1) {
+    if (!_.isArray(nodes) || nodes.length < 1) {
       throw new Error('No title!');
     }
     const node = /** @type {Node} */ (nodes[0]);
@@ -73,6 +76,11 @@ class FakeApp {
 
   setDims() {
     const nodes = this.xpathQuery('//app');
+    if (!_.isArray(nodes)) {
+      throw new Error(
+        'Cannot fetch app dimensions because no corresponding node has benn found in the source'
+      );
+    }
     const app = new FakeElement(nodes[0], this);
     this._width = parseInt(app.nodeAttrs.width, 10);
     this._height = parseInt(app.nodeAttrs.height, 10);
@@ -86,18 +94,19 @@ class FakeApp {
     this.rawXml = this.rawXml.replace('<app ', '<AppiumAUT><app ');
     this.rawXml = this.rawXml.replace('<app>', '<AppiumAUT><app>');
     this.rawXml = this.rawXml.replace('</app>', '</app></AppiumAUT>');
-    this.dom = new XMLDom.DOMParser().parseFromString(this.rawXml);
+    this.dom = new XMLDom.DOMParser().parseFromString(this.rawXml, XMLDom.MIME_TYPE.XML_TEXT);
     this.activeDom = this.dom;
   }
 
   getWebviews() {
-    return this.xpathQuery('//MockWebView/*[1]').map((n) => new FakeWebView(n));
+    const nodes = this.xpathQuery('//MockWebView/*[1]');
+    return _.isArray(nodes) ? nodes.map((n) => new FakeWebView(n)) : [];
   }
 
   activateWebview(wv) {
     this.activeWebview = wv;
     let fragment = new XMLDom.XMLSerializer().serializeToString(wv.node);
-    this.activeDom = new XMLDom.DOMParser().parseFromString(fragment, 'application/xml');
+    this.activeDom = new XMLDom.DOMParser().parseFromString(fragment, XMLDom.MIME_TYPE.XML_TEXT);
   }
 
   deactivateWebview() {
@@ -108,7 +117,7 @@ class FakeApp {
   activateFrame(frame) {
     this.activeFrame = frame;
     let fragment = new XMLDom.XMLSerializer().serializeToString(frame);
-    this.activeDom = new XMLDom.DOMParser().parseFromString(fragment, 'application/xml');
+    this.activeDom = new XMLDom.DOMParser().parseFromString(fragment, XMLDom.MIME_TYPE.XML_TEXT);
   }
 
   deactivateFrame() {
@@ -151,7 +160,7 @@ class FakeApp {
 
   showAlert(alertId) {
     let nodes = this.xpathQuery(`//alert[@id="${alertId}"]`);
-    if (nodes.length < 1) {
+    if (!_.isArray(nodes) || _.isEmpty(nodes)) {
       throw new Error(`Alert ${alertId} doesn't exist!`);
     }
     this.activeAlert = new FakeElement(nodes[0], this);
@@ -175,8 +184,6 @@ class FakeWebView {
     this.node = node;
   }
 }
-
-export {FakeApp};
 
 /**
  * @typedef {Element & {data: any}} ElementWithData

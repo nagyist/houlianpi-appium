@@ -1,14 +1,27 @@
 import {select as xpathQuery} from 'xpath';
-import {DOMParser} from '@xmldom/xmldom';
+import {DOMParser, MIME_TYPE} from '@xmldom/xmldom';
+import _ from 'lodash';
 
 export function runQuery(query, xmlStr) {
-  const dom = new DOMParser().parseFromString(xmlStr);
+  const dom = new DOMParser().parseFromString(xmlStr, MIME_TYPE.XML_TEXT);
+  // @ts-expect-error Misssing Node properties are not needed.
+  // https://github.com/xmldom/xmldom/issues/724
   const nodes = xpathQuery(query, dom);
   return nodes;
 }
 
+/**
+ *
+ * @param {string} query
+ * @param {string} xmlStr
+ * @param {boolean} multiple
+ * @returns {string|null}
+ */
 export function transformQuery(query, xmlStr, multiple) {
   const nodes = runQuery(query, xmlStr);
+  if (!_.isArray(nodes)) {
+    return null;
+  }
 
   const newQueries = nodes.map((node) => {
     const indexPath = getNodeAttrVal(node, 'indexPath');

@@ -29,11 +29,16 @@ build/
 .idea
 *DerivedData
 __pycache__
+certificate.cert
+certificate.key
 
 # csharp
 *.pyc
 *.pdb
 .vs
+
+#vscode
+.history
 
 old
 .tern-project
@@ -58,8 +63,6 @@ appium.zip
 **/build-fixtures/**
 *.tsbuildinfo
 packages/*/LICENSE
+\!packages/*/LICENSE
 local_appium_home
-jsdoc-out
 *.tgz
-typedoc-docs
-packages/appium/docs/*/reference

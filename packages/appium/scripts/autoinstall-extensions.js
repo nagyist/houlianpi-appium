@@ -22,6 +22,8 @@
  */
 
 const B = require('bluebird');
+const path = require('node:path');
+const {realpath} = require('node:fs/promises');
 
 B.config({
   cancellation: true,
@@ -56,16 +58,37 @@ function log(message) {
 }
 
 /**
+ * This is a naive attempt at determining whether or not we are in a dev environment; in other
+ * words, is `postinstall` being run from within the `appium` monorepo?
+ *
+ * When we're in the monorepo, `npm_config_local_prefix` will be set to the root of the monorepo root
+ * dir when running this lifecycle script from an `npm install` in the monorepo root.
+ *
+ * `realpath` is necessary due to macOS omitting `/private` from paths
+ */
+async function isDevEnvironment() {
+  return (
+    process.env.npm_config_local_prefix &&
+    path.join(process.env.npm_config_local_prefix, 'packages', 'appium') ===
+      (await realpath(path.join(__dirname, '..')))
+  );
+}
+
+/**
  * Setup / check environment if we should do anything here
  * @returns {Promise<boolean>} `true` if Appium is built and ready to go
  */
 async function init() {
+  if (await isDevEnvironment()) {
+    log('Dev environment likely; skipping automatic installation of extensions');
+    return false;
+  }
   try {
     ({env, util, logger} = require('@appium/support'));
-    // @ts-ignore
+    // @ts-ignore This is OK
     ({runExtensionCommand} = require('../build/lib/cli/extension'));
     ({DRIVER_TYPE, PLUGIN_TYPE} = require('../build/lib/constants'));
-    // @ts-ignore
+    // @ts-ignore This is OK
     ({loadExtensions} = require('../build/lib/extension'));
     logger.getLogger('Appium').level = 'error';
 
@@ -96,7 +119,7 @@ async function main() {
 
   if (!driverEnv && !pluginEnv) {
     spinner.succeed(
-      wrap(`No drivers or plugins to automatically install. 
+      wrap(`No drivers or plugins to automatically install.
       If desired, provide arguments with comma-separated values "--drivers=<known_driver>[,known_driver...]" and/or "--plugins=<known_plugin>[,known_plugin...]" to the "npm install appium" command. The specified extensions will be installed automatically with Appium.  Note: to see the list of known extensions, run "appium <driver|plugin> list".`)
     );
     return;
@@ -170,7 +193,7 @@ async function checkAndInstallExtension({
   spinner,
 }) {
   const extList = await runExtensionCommand(
-    // @ts-ignore
+    // @ts-ignore This is OK
     {
       appiumHome,
       subcommand: type,
@@ -186,7 +209,7 @@ async function checkAndInstallExtension({
   }
   spinner.start(`Installing ${type} "${ext}"...`);
   await runExtensionCommand(
-    // @ts-ignore
+    // @ts-ignore this is OK
     {
       subcommand: type,
       appiumHome,

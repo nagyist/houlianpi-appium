@@ -1,5 +1,9 @@
-import {AppiumLogger, Class, ExecuteMethodMap, MethodMap, UpdateServerCallback} from '.';
-import {ExternalDriver} from './driver';
+import {AsyncReturnType} from 'type-fest';
+import {BidiModuleMap, ExecuteMethodMap, MethodMap} from './command';
+import {DriverCommand, ExternalDriver} from './driver';
+import {AppiumLogger} from './logger';
+import {UpdateServerCallback} from './server';
+import {Class, StringRecord} from './util';
 
 /**
  * The interface describing the constructor and static properties of a Plugin.
@@ -22,7 +26,35 @@ export interface PluginStatic<P extends Plugin> {
    */
   newMethodMap?: MethodMap<P>;
   executeMethodMap?: ExecuteMethodMap<P>;
+  newBidiCommands?: BidiModuleMap;
 }
+
+/**
+ * This utility type can presently be used by Plugin authors to mark a method in their plugin as one
+ * which overrides a method in a Driver.
+ * @privateRemarks This would work well as a decorator. May want to accept a type arg for `Driver`
+ * and use a string method name to lookup the method instead.
+ * @example
+ *
+ * class MyPlugin extends BasePlugin implements Plugin {
+ *   public getPageSource: DriverCommandToPluginCommand<
+ *     ExternalDriver['getPageSource'], // method to override
+ *     [flag: boolean], // new arguments; defaults to the args of the method
+ *     string|Buffer, // new return type; defaults to the async return type of the method
+ *     string // async return type of `next()`
+ *   > = async function (next, driver, flag = boolean) {
+ *     const source = await next();
+ *     return flag ? source : Buffer.from(source);
+ *   }
+ * }
+ *
+ */
+export type DriverCommandToPluginCommand<
+  DC extends DriverCommand,
+  TArgs extends readonly any[] = Parameters<DC>,
+  TReturn = AsyncReturnType<DC>,
+  NextRetval = unknown
+> = PluginCommand<ExternalDriver, TArgs, TReturn, NextRetval>;
 
 /**
  * An instance of a "plugin" extension.
@@ -69,7 +101,7 @@ export interface Plugin {
  * `driver._eventHistory.commands.push({cmd: cmdName, startTime, endTime})` --
  * after running plugin logic
  */
-export type NextPluginCallback = () => Promise<void>;
+export type NextPluginCallback<T = unknown> = () => Promise<T>;
 
 /**
  * Implementation of a command within a plugin
@@ -79,8 +111,9 @@ export type NextPluginCallback = () => Promise<void>;
 export type PluginCommand<
   D extends ExternalDriver = ExternalDriver,
   TArgs extends readonly any[] = any[],
-  TReturn = any
-> = (next: NextPluginCallback, driver: D, ...args: TArgs) => Promise<TReturn>;
+  TReturn = unknown,
+  NextReturn = unknown
+> = (next: NextPluginCallback<NextReturn>, driver: D, ...args: TArgs) => Promise<TReturn>;
 
 /**
  * Mainly for internal use.
@@ -90,5 +123,5 @@ export type PluginCommand<
 export type PluginClass<P extends Plugin = Plugin> = Class<
   P,
   PluginStatic<P>,
-  [pluginName: string, cliArgs: Record<string, unknown>]
+  [pluginName: string, cliArgs: StringRecord<unknown>, driverId: string|null]
 >;

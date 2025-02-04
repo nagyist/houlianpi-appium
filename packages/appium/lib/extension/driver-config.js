@@ -135,9 +135,9 @@ export class DriverConfig extends ExtensionConfig {
    * Given capabilities, find a matching driver within the config. Load its class and return it along with version and driver name.
    * @template {import('@appium/types').StringRecord} C
    * @param {C} caps
-   * @returns {MatchedDriver}
+   * @returns {Promise<MatchedDriver>}
    */
-  findMatchingDriver({automationName, platformName}) {
+  async findMatchingDriver({automationName, platformName}) {
     if (!_.isString(platformName)) {
       throw new Error('You must include a platformName capability');
     }
@@ -158,7 +158,7 @@ export class DriverConfig extends ExtensionConfig {
       );
       log.info(`The '${driverName}' driver was installed and matched caps.`);
       log.info(`Will require it at ${this.getInstallPath(driverName)}`);
-      const driver = this.require(driverName);
+      const driver = await this.requireAsync(driverName);
       if (!driver) {
         throw new Error(
           `Driver '${driverName}' did not export a class with name '${mainClass}'. Contact the author of the driver!`
@@ -212,28 +212,29 @@ export class DriverConfig extends ExtensionConfig {
 }
 
 /**
- * @template T
+ * @template {ExtensionType} T
  * @typedef {import('appium/types').ExtMetadata<T>} ExtMetadata
  */
 
 /**
- * @template T
+ * @template {ExtensionType} T
  * @typedef {import('appium/types').ExtManifest<T>} ExtManifest
  */
 
 /**
+ * @typedef {import('@appium/types').ExtensionType} ExtensionType
  * @typedef {import('appium/types').ManifestData} ManifestData
  * @typedef {import('@appium/types').DriverType} DriverType
  * @typedef {import('./manifest').Manifest} Manifest
  */
 
 /**
- * @template T
+ * @template {ExtensionType} T
  * @typedef {import('appium/types').ExtRecord<T>} ExtRecord
  */
 
 /**
- * @template T
+ * @template {ExtensionType} T
  * @typedef {import('appium/types').ExtName<T>} ExtName
  */
 
@@ -243,8 +244,4 @@ export class DriverConfig extends ExtensionConfig {
  * @property {import('@appium/types').DriverClass} driver
  * @property {string} version
  * @property {string} driverName
- */
-
-/**
- * @typedef {import('@appium/types').Capabilities} Capabilities
  */

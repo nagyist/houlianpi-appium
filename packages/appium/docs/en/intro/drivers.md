@@ -2,7 +2,7 @@
 title: Intro to Appium Drivers
 ---
 
-As the [main Overview](index.md) makes clear, "drivers" are basically Appium's answer to the
+As the [main Overview](./appium.md) makes clear, "drivers" are basically Appium's answer to the
 question, "how do we support automation of multiple, unrelated platforms?" In this doc we'll get
 into a little more detail about how drivers work. The specific details of how drivers work probably
 don't matter too much for you, unless you're planning on writing your own driver or contributing to
@@ -32,12 +32,12 @@ driver install`.
 So, from a technical perspective, an Appium driver is just a bit of code that inherits from some
 other Appium code. That's it! Now, inheriting from `BaseDriver` actually gives us a lot, because
 `BaseDriver` is essentially an encapsulation of the entire WebDriver protocol. So all a driver
-needs to do to do something useful is to *implement* Node.js methods with names corresponding to
+needs to do something useful is to *implement* Node.js methods with names corresponding to
 their WebDriver protocol equivalents.
 
 So let's say I wanted to do something with this empty driver; first I have to decide which
 WebDriver command I want to implement. For our example, let's take the [Navigate
-To](https://www.w3.org/TR/webdriver1/#navigate-to) WebDriver command. Leave aside for the moment
+To](https://w3c.github.io/webdriver/#navigate-to) WebDriver command. Leave aside for the moment
 what I want to have the driver *do* when this command is executed. To tell Appium the driver can
 handle the command, all we have to do is define a method like this in our driver class:[^1]
 
@@ -50,7 +50,7 @@ async setUrl(url) {
 [^1]: You might notice that `setUrl` doesn't look anything like `Navigate To`, so how did we know
   to use it rather than some other random string? Well, Appium's WebDriver-protocol-to-method-name
   mapping is defined in a special file within the `@appium/base-driver` package called
-  [routes.js](https://github.com/appium/appium/blob/2.0/packages/base-driver/lib/protocol/routes.js).
+  [routes.js](https://github.com/appium/appium/blob/master/packages/base-driver/lib/protocol/routes.js).
   So if you're writing a driver, this is where you would go to figure out what method names to use
   and what parameters to expect. Or you could look at the source for any of the main Appium
   drivers!
@@ -96,7 +96,7 @@ a driver becomes the task of mapping the WebDriver protocol to this underlying A
 a set of different underlying APIs--for example, the UiAutomator2 driver relies not only on the
 [UiAutomator2](https://developer.android.com/training/testing/other-components/ui-automator)
 technology from Google, but also functions only available through
-[ADB](https://developer.android.com/studio/command-line/adb), as well as functions only available
+[ADB](https://developer.android.com/tools/adb), as well as functions only available
 via the Android SDK inside a helper app). Tying it all together into a single, usable, WebDriver
 interface is the incredibly useful (but incredibly challenging) art of driver development!
 
