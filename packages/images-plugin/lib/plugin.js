@@ -1,20 +1,15 @@
-/* eslint-disable no-case-declarations */
+
 
 import _ from 'lodash';
 import {errors} from 'appium/driver';
-import BasePlugin from 'appium/plugin';
+import {BasePlugin} from 'appium/plugin';
 import {compareImages} from './compare';
 import ImageElementFinder from './finder';
-import {ImageElement, IMAGE_ELEMENT_PREFIX} from './image-element';
-
-const IMAGE_STRATEGY = '-image';
+import {ImageElement} from './image-element';
+import {IMAGE_STRATEGY, IMAGE_ELEMENT_PREFIX} from './constants';
 
 function getImgElFromArgs(args) {
-  for (let arg of args) {
-    if (_.isString(arg) && arg.startsWith(IMAGE_ELEMENT_PREFIX)) {
-      return arg;
-    }
-  }
+  return args.find((arg) => _.isString(arg) && arg.startsWith(IMAGE_ELEMENT_PREFIX));
 }
 
 export default class ImageElementPlugin extends BasePlugin {
@@ -38,6 +33,7 @@ export default class ImageElementPlugin extends BasePlugin {
   });
 
   async compareImages(next, driver, ...args) {
+    // @ts-ignore Arguments should be ok there
     return await compareImages(...args);
   }
 
@@ -49,6 +45,14 @@ export default class ImageElementPlugin extends BasePlugin {
     return await this._find(true, next, driver, ...args);
   }
 
+  /**
+   *
+   * @param {boolean} multiple
+   * @param {*} next
+   * @param {*} driver
+   * @param  {...any} args
+   * @returns {Promise<any>}
+   */
   async _find(multiple, next, driver, ...args) {
     const [strategy, selector] = args;
 
@@ -57,8 +61,7 @@ export default class ImageElementPlugin extends BasePlugin {
       return await next();
     }
 
-    this.finder.setDriver(driver);
-    return await this.finder.findByImage(selector, {multiple});
+    return await this.finder.findByImage(Buffer.from(selector, 'base64'), driver, {multiple});
   }
 
   async handle(next, driver, cmdName, ...args) {
@@ -66,11 +69,15 @@ export default class ImageElementPlugin extends BasePlugin {
     // and execute the command on it
     const imgElId = getImgElFromArgs(args);
     if (imgElId) {
-      if (!this.finder.imgElCache.has(imgElId)) {
+      const imgEl = this.finder.getImageElement(imgElId);
+      if (!imgEl) {
         throw new errors.NoSuchElementError();
       }
-      const imgEl = this.finder.imgElCache.get(imgElId);
       return await ImageElement.execute(driver, imgEl, cmdName, ...args);
+    }
+
+    if (cmdName === 'deleteSession') {
+      this.finder.clearImageElements();
     }
 
     // otherwise just do the normal thing

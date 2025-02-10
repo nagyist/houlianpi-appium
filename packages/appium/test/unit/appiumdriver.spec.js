@@ -6,15 +6,14 @@ import {BaseDriver} from '@appium/base-driver';
 import {FakeDriver} from '@appium/fake-driver';
 import {sleep} from 'asyncbox';
 import _ from 'lodash';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {finalizeSchema, registerSchema, resetSchema} from '../../lib/schema/schema';
 import {insertAppiumPrefixes, removeAppiumPrefixes} from '../../lib/utils';
 import {rewiremock, BASE_CAPS, W3C_CAPS, W3C_PREFIXED_CAPS} from '../helpers';
-import BasePlugin from '@appium/base-plugin';
+import {BasePlugin} from '@appium/base-plugin';
 
 const SESSION_ID = '1';
-
-const {expect} = chai;
 
 describe('AppiumDriver', function () {
   /** @type {import('sinon').SinonSandbox} */
@@ -25,6 +24,15 @@ describe('AppiumDriver', function () {
 
   /** @type {MockConfig} */
   let MockConfig;
+  let expect;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();
@@ -64,10 +72,10 @@ describe('AppiumDriver', function () {
       // triggers the `log` getter to set `_log`
       ad.log;
       // now we can stub `_log`, since it exists
-      sandbox.stub(ad._log, 'debug');
+      const debugStrub = sandbox.stub(ad._log, 'debug');
       // finally, wait for `updateBuildInfo()` to finish up
       await promise;
-      ad._log.debug.should.have.been.calledOnce;
+      debugStrub.calledOnce.should.be.true;
     });
   });
 
@@ -351,7 +359,7 @@ describe('AppiumDriver', function () {
         _.keys(appium.sessions).should.not.contain(sessionId);
       });
       it('should remove session if inner driver unexpectedly exits with no error', async function () {
-        let [sessionId] = (await appium.createSession(null, null, _.clone(W3C_CAPS))).value; // eslint-disable-line comma-spacing
+        let [sessionId] = (await appium.createSession(null, null, _.clone(W3C_CAPS))).value;
         _.keys(appium.sessions).should.contain(sessionId);
         appium.sessions[sessionId].eventEmitter.emit('onUnexpectedShutdown');
         // let event loop spin so rejection is handled
@@ -403,7 +411,7 @@ describe('AppiumDriver', function () {
             [ArgsPlugin, 'args'],
           ]);
           for (const plugin of appium.createPluginInstances()) {
-            chai.expect(plugin.cliArgs).to.eql({});
+            expect(plugin.cliArgs).to.eql({});
           }
         });
       });

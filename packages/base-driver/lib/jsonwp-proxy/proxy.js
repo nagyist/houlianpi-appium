@@ -15,10 +15,10 @@ import ProtocolConverter from './protocol-converter';
 import {formatResponseValue, formatStatus} from '../protocol/helpers';
 import http from 'http';
 import https from 'https';
+import { match as pathToRegexMatch } from 'path-to-regexp';
 
 const DEFAULT_LOG = logger.getLogger('WD Proxy');
 const DEFAULT_REQUEST_TIMEOUT = 240000;
-const COMPACT_ERROR_PATTERNS = [/\bECONNREFUSED\b/, /socket hang up/];
 
 const {MJSONWP, W3C} = PROTOCOLS;
 
@@ -111,8 +111,24 @@ class JWProxy {
     this._activeRequests = [];
   }
 
+  /**
+   * Return true if the given endpoint started with '/session' and
+   * it could have session id after the path.
+   * e.g.
+   * - should return true
+   *   - /session/82a9b7da-faaf-4a1d-8ef3-5e4fb5812200
+   *   - /session/82a9b7da-faaf-4a1d-8ef3-5e4fb5812200/url
+   * - should return false
+   *   - /session
+   *   - /sessions
+   *   - /session/
+   *   - /status
+   *   - /appium/sessions
+   * @param {string} endpoint
+   * @returns {boolean}
+   */
   endpointRequiresSessionId(endpoint) {
-    return !_.includes(['/session', '/sessions', '/status'], endpoint);
+    return !!(pathToRegexMatch('/session/:sessionId{/*command}')(endpoint));
   }
 
   set downstreamProtocol(value) {
@@ -129,7 +145,7 @@ class JWProxy {
       url = '/';
     }
     const proxyBase = `${this.scheme}://${this.server}:${this.port}${this.base}`;
-    const endpointRe = '(/(session|status))';
+    const endpointRe = '(/(session|status|appium))';
     let remainingUrl = '';
     if (/^http/.test(url)) {
       const first = new RegExp(`(https?://.+)${endpointRe}`).exec(url);
@@ -143,7 +159,7 @@ class JWProxy {
       throw new Error(`Did not know what to do with url '${url}'`);
     }
 
-    const stripPrefixRe = new RegExp('^.*?(/(session|status).*)$');
+    const stripPrefixRe = new RegExp('^.*?(/(session|status|appium).*)$');
     if (stripPrefixRe.test(remainingUrl)) {
       remainingUrl = /** @type {RegExpExecArray} */ (stripPrefixRe.exec(remainingUrl))[1];
     }
@@ -208,7 +224,7 @@ class JWProxy {
       if (typeof body !== 'object') {
         try {
           reqOpts.data = JSON.parse(body);
-        } catch (e) {
+        } catch {
           throw new Error(`Cannot interpret the request body as valid JSON: ${truncateBody(body)}`);
         }
       } else {
@@ -271,11 +287,7 @@ class JWProxy {
         }
       } else {
         proxyErrorMsg = `Could not proxy command to the remote server. Original error: ${e.message}`;
-        if (COMPACT_ERROR_PATTERNS.some((p) => p.test(e.message))) {
-          this.log.info(e.message);
-        } else {
-          this.log.info(e.stack);
-        }
+        this.log.info(e.message);
       }
       throw new errors.ProxyRequestError(proxyErrorMsg, e.response?.data, e.response?.status);
     }
@@ -320,6 +332,12 @@ class JWProxy {
     return commandName;
   }
 
+  /**
+   *
+   * @param {string} url
+   * @param {import('@appium/types').HTTPMethod} method
+   * @param {any?} body
+   */
   async proxyCommand(url, method, body = null) {
     const commandName = this.requestToCommandName(url, method);
     if (!commandName) {
@@ -330,6 +348,13 @@ class JWProxy {
     return await this.protocolConverter.convertAndProxy(commandName, url, method, body);
   }
 
+  /**
+   *
+   * @param {string} url
+   * @param {import('@appium/types').HTTPMethod} method
+   * @param {any?} body
+   * @returns {Promise<unknown>}
+   */
   async command(url, method, body = null) {
     let response;
     let resBodyObj;

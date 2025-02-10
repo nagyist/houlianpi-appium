@@ -1,13 +1,26 @@
-import {ImageElementPlugin, IMAGE_STRATEGY} from '../../lib/plugin';
-import {MATCH_FEATURES_MODE, GET_SIMILARITY_MODE, MATCH_TEMPLATE_MODE} from '../../lib/compare';
-import BaseDriver from 'appium/driver';
-import {W3C_ELEMENT_KEY} from '../../lib/finder';
+import {ImageElementPlugin} from '../../lib/plugin';
+import {
+  MATCH_FEATURES_MODE,
+  GET_SIMILARITY_MODE,
+  MATCH_TEMPLATE_MODE,
+  IMAGE_STRATEGY,
+} from '../../lib/constants';
+import {BaseDriver} from 'appium/driver';
 import {TEST_IMG_1_B64, TEST_IMG_2_B64, TEST_IMG_2_PART_B64} from '../fixtures';
+import {util} from '@appium/support';
 
 describe('ImageElementPlugin#handle', function () {
   const next = () => {};
   const driver = new BaseDriver();
   const p = new ImageElementPlugin();
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
+
   describe('compareImages', function () {
     this.timeout(6000);
     it('should compare images via match features mode', async function () {
@@ -26,8 +39,8 @@ describe('ImageElementPlugin#handle', function () {
         next,
         driver,
         GET_SIMILARITY_MODE,
-        TEST_IMG_1_B64,
-        TEST_IMG_2_B64,
+        Buffer.from(TEST_IMG_1_B64, 'base64'),
+        Buffer.from(TEST_IMG_2_B64, 'base64'),
         {}
       );
       res.score.should.be.above(0.2);
@@ -50,13 +63,26 @@ describe('ImageElementPlugin#handle', function () {
         .compareImages(next, driver, 'some mode', '', '')
         .should.eventually.be.rejectedWith(/comparison mode is unknown/);
     });
+    it('should throw an error if image template is broken', async function () {
+      await p.compareImages(
+        next,
+        driver,
+        MATCH_TEMPLATE_MODE,
+        Buffer.from('d1423423424'),
+        Buffer.from('d1423423424')
+      ).should.eventually.be.rejected;
+    });
+    it('should throw an error if image template is empty', async function () {
+      await p.compareImages(next, driver, MATCH_TEMPLATE_MODE, Buffer.from(''), Buffer.from(''))
+        .should.eventually.be.rejected;
+    });
   });
 
   describe('findElement(s)', function () {
     driver.settings = {getSettings: () => ({})};
     driver.isW3CProtocol = () => true;
     driver.getScreenshot = () => TEST_IMG_2_B64;
-    driver.getWindowSize = () => ({width: 64, height: 64});
+    driver.getWindowRect = () => ({x: 0, y: 0, width: 64, height: 64});
     it('should defer execution to regular command if not a find command', async function () {
       const next = () => true;
       await p.handle(next, driver, 'sendKeys').should.eventually.become(true);
@@ -68,12 +94,12 @@ describe('ImageElementPlugin#handle', function () {
     });
     it('should find an image element inside a screenshot', async function () {
       const el = await p.findElement(next, driver, IMAGE_STRATEGY, TEST_IMG_2_PART_B64);
-      el[W3C_ELEMENT_KEY].should.include('appium-image-element');
+      util.unwrapElement(el).should.include('appium-image-element');
     });
     it('should find image elements inside a screenshot', async function () {
       const els = await p.findElements(next, driver, IMAGE_STRATEGY, TEST_IMG_2_PART_B64);
       els.should.have.length(1);
-      els[0][W3C_ELEMENT_KEY].should.include('appium-image-element');
+      util.unwrapElement(els[0]).should.include('appium-image-element');
     });
   });
 
@@ -83,9 +109,9 @@ describe('ImageElementPlugin#handle', function () {
       driver.settings = {getSettings: () => ({})};
       driver.isW3CProtocol = () => true;
       driver.getScreenshot = () => TEST_IMG_2_B64;
-      driver.getWindowSize = () => ({width: 64, height: 64});
+      driver.getWindowRect = () => ({x: 0, y: 0, width: 64, height: 64});
       const el = await p.findElement(next, driver, IMAGE_STRATEGY, TEST_IMG_2_PART_B64);
-      elId = el[W3C_ELEMENT_KEY];
+      elId = util.unwrapElement(el);
     });
     it('should click on the screen coords of the middle of the element', async function () {
       let action = null;
@@ -140,7 +166,7 @@ describe('ImageElementPlugin#handle', function () {
         }),
       };
       const el = await p.findElement(next, driver, IMAGE_STRATEGY, TEST_IMG_2_PART_B64);
-      elId = el[W3C_ELEMENT_KEY];
+      elId = util.unwrapElement(el);
       await p
         .handle(next, driver, 'getAttribute', 'visual', elId)
         .should.eventually.include('iVBOR');

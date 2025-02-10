@@ -1,6 +1,7 @@
 // @ts-check
 
 import _ from 'lodash';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import {getParser} from '../../lib/cli/parser';
 import {
@@ -9,11 +10,9 @@ import {
   getNonDefaultServerArgs,
   showBuildInfo,
   showConfig,
-  validateTmpDir,
-  warnNodeDeprecations,
+  requireDir,
 } from '../../lib/config';
 import {PLUGIN_TYPE} from '../../lib/constants';
-import logger from '../../lib/logger';
 import {
   finalizeSchema,
   getDefaultsForSchema,
@@ -24,6 +23,13 @@ import {
 describe('Config', function () {
   /** @type {sinon.SinonSandbox} */
   let sandbox;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();
@@ -47,7 +53,7 @@ describe('Config', function () {
       it('should log build info to console', async function () {
         const config = getBuildInfo();
         await showBuildInfo();
-        log.should.have.been.calledOnce;
+        log.calledOnce.should.be.true;
         log.firstCall.args.should.contain(JSON.stringify(config));
       });
     });
@@ -66,7 +72,7 @@ describe('Config', function () {
             {port: 1234},
             {allowCors: false}
           );
-          log.should.have.been.calledWith('Appium Configuration\n');
+          log.calledWith('Appium Configuration\n').should.be.true;
         });
 
         it('should skip empty objects', function () {
@@ -77,7 +83,7 @@ describe('Config', function () {
             {spam: 'food'},
             {}
           );
-          dir.should.have.been.calledWith({foo: 'bar', sheep: 0, ducks: false});
+          dir.calledWith({foo: 'bar', sheep: 0, ducks: false}).should.be.true;
         });
       });
 
@@ -90,7 +96,7 @@ describe('Config', function () {
             {spam: 'food'},
             {}
           );
-          log.should.have.been.calledWith('\n(no configuration file loaded)');
+          log.calledWith('\n(no configuration file loaded)').should.be.true;
         });
       });
 
@@ -98,7 +104,7 @@ describe('Config', function () {
         it('should not dump CLI args', function () {
           // @ts-expect-error
           showConfig({}, {}, {}, {});
-          log.should.have.been.calledWith('\n(no CLI parameters provided)');
+          log.calledWith('\n(no CLI parameters provided)').should.be.true;
         });
       });
     });
@@ -161,28 +167,6 @@ describe('Config', function () {
         });
       });
     });
-
-    describe('warnNodeDeprecations', function () {
-      let spy;
-      before(function () {
-        spy = sandbox.spy(logger, 'warn');
-      });
-      beforeEach(function () {
-        spy.resetHistory();
-      });
-      it('should not log a warning if node is 8+', function () {
-        // @ts-expect-error
-        process.version = 'v8.0.0';
-        warnNodeDeprecations();
-        logger.warn.should.not.be.called;
-      });
-      it('should not log a warning if node is 9+', function () {
-        // @ts-expect-error
-        process.version = 'v9.0.0';
-        warnNodeDeprecations();
-        logger.warn.should.not.be.called;
-      });
-    });
   });
 
   describe('server arguments', function () {
@@ -238,18 +222,21 @@ describe('Config', function () {
     });
   });
 
-  describe('validateTmpDir', function () {
-    it('should fail to use a tmp dir with incorrect permissions', function () {
-      validateTmpDir('/private/if_you_run_with_sudo_this_wont_fail').should.be.rejectedWith(
-        /could not ensure/
+  describe('requireDir', function () {
+    it('should fail to use a dir with incorrect permissions', function () {
+      requireDir('/private/if_you_run_with_sudo_this_wont_fail').should.be.rejectedWith(
+        /must exist/
       );
     });
-    it('should fail to use an undefined tmp dir', function () {
+    it('should fail to use an undefined dir', function () {
       // @ts-expect-error
-      validateTmpDir().should.be.rejectedWith(/could not ensure/);
+      requireDir().should.be.rejectedWith(/must exist/);
     });
-    it('should be able to use a tmp dir with correct permissions', function () {
-      validateTmpDir('/tmp/test_tmp_dir/with/any/number/of/levels').should.not.be.rejected;
+    it('should fail to use an non-writeable dir', function () {
+      requireDir('/private').should.be.rejectedWith(/must be writeable/);
+    });
+    it('should be able to use a dir with correct permissions', function () {
+      requireDir('/tmp/test_tmp_dir/with/any/number/of/levels').should.not.be.rejected;
     });
   });
 

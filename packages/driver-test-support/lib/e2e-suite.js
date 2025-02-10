@@ -3,10 +3,8 @@ import {server, routeConfiguringFunction, DeviceSettings} from 'appium/driver';
 import axios from 'axios';
 import B from 'bluebird';
 import {TEST_HOST, getTestPort, createAppiumURL} from './helpers';
-import chai from 'chai';
 import sinon from 'sinon';
-
-const should = chai.should();
+import {Agent} from 'node:http';
 
 /**
  * Creates some helper functions for E2E tests to manage sessions.
@@ -99,8 +97,7 @@ export function createSessionHelpers(port, address = TEST_HOST) {
 
 /**
  * Creates E2E test suites for a driver.
- * @template {Driver} P
- * @param {DriverClass<P>} DriverClass
+ * @param {DriverClass} DriverClass
  * @param {Partial<BaseNSCapabilities>} [defaultCaps]
  */
 export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
@@ -110,7 +107,7 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
 
   describe(`BaseDriver E2E (as ${className})`, function () {
     let baseServer;
-    /** @type {P} */
+    /** @type {Driver} */
     let d;
     /**
      * This URL creates a new session
@@ -128,7 +125,16 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
     let getCommand;
     /** @type {SessionHelpers['postCommand']} */
     let postCommand;
+    let expect;
+    let should;
+
     before(async function () {
+      const chai = await import('chai');
+      const chaiAsPromised = await import('chai-as-promised');
+      chai.use(chaiAsPromised.default);
+      expect = chai.expect;
+      should = chai.should();
+
       port = port ?? (await getTestPort());
       defaultCaps = {...defaultCaps};
       d = new DriverClass({port, address});
@@ -142,13 +148,15 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
       ({startSession, getSession, endSession, newSessionURL, getCommand, postCommand} =
         createSessionHelpers(port, address));
     });
-
     after(async function () {
-      await baseServer.close();
+      await baseServer?.close();
     });
 
     describe('session handling', function () {
       it('should handle idempotency while creating sessions', async function () {
+        // workaround for https://github.com/node-fetch/node-fetch/issues/1735
+        const httpAgent = new Agent({keepAlive: true});
+
         const sessionIds = [];
         let times = 0;
         do {
@@ -160,11 +168,7 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
               headers: {
                 'X-Idempotency-Key': '123456',
               },
-              // XXX: I'm not sure what these are, as they are not documented axios options,
-              // nor are they mentioned in our source
-              // @ts-expect-error
-              simple: false,
-              resolveWithFullResponse: true,
+              httpAgent,
             }
           );
 
@@ -179,6 +183,9 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
       });
 
       it('should handle idempotency while creating parallel sessions', async function () {
+        // workaround for https://github.com/node-fetch/node-fetch/issues/1735
+        const httpAgent = new Agent({keepAlive: true});
+
         const reqs = [];
         let times = 0;
         do {
@@ -193,6 +200,7 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
                 headers: {
                   'X-Idempotency-Key': '12345',
                 },
+                httpAgent,
               }
             )
           );
@@ -397,43 +405,68 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
     });
 
     describe('event timings', function () {
-      it('should not add timings if not using opt-in cap', async function () {
-        const session = await startSession({capabilities: {alwaysMatch: defaultCaps}});
-        const res = await getSession(session.sessionId);
-        should.not.exist(res.events);
-        await endSession(session.sessionId);
+      /** @type {NewSessionResponse} */
+      let session;
+      /** @type {SingularSessionData} */
+      let res;
+
+      describe('when not provided the eventTimings cap', function () {
+        before(async function () {
+          session = await startSession({capabilities: {alwaysMatch: defaultCaps}});
+          res = await getSession(session.sessionId);
+        });
+
+        after(async function () {
+          if (session) {
+            await endSession(session.sessionId);
+          }
+        });
+
+        it('should not respond with events', function () {
+          expect(res.events).to.be.undefined;
+        });
       });
-      it('should add start session timings', async function () {
-        const caps = {...defaultCaps, 'appium:eventTimings': true};
-        const session = await startSession({capabilities: {alwaysMatch: caps}});
-        const res = await getSession(session.sessionId);
-        should.exist(res.events);
-        should.exist(res.events?.newSessionRequested);
-        should.exist(res.events?.newSessionStarted);
-        res.events?.newSessionRequested[0].should.be.a('number');
-        res.events?.newSessionStarted[0].should.be.a('number');
-        await endSession(session.sessionId);
+
+      describe('when provided the eventTimings cap', function () {
+        before(async function () {
+          session = await startSession({
+            capabilities: {alwaysMatch: {...defaultCaps, 'appium:eventTimings': true}},
+          });
+          res = await getSession(session.sessionId);
+        });
+
+        after(async function () {
+          if (session) {
+            await endSession(session.sessionId);
+          }
+        });
+
+        it('should add a newSessionRequested event', function () {
+          expect(res.events?.newSessionRequested?.[0]).to.be.a('number');
+        });
+
+        it('should add a newSessionStarted event', function () {
+          expect(res.events?.newSessionRequested?.[0]).to.be.a('number');
+        });
       });
     });
   });
 }
 
 /**
- * A {@linkcode DriverClass}, except using the base {@linkcode Driver} type instead of `ExternalDriver`.
- * This allows the suite to work for `BaseDriver`.
- * @template {Driver} P
- * @typedef {import('@appium/types').DriverClass<P>} DriverClass
- */
-
-/**
+ * @typedef {import('@appium/types').DriverClass} DriverClass
  * @typedef {import('@appium/types').Driver} Driver
  * @typedef {import('@appium/types').Constraints} Constraints
- * @typedef {import('@appium/types').DriverStatic} DriverStatic
  * @typedef {import('@appium/types').StringRecord} StringRecord
  * @typedef {import('@appium/types').BaseDriverCapConstraints} BaseDriverCapConstraints
  * @typedef {import('@appium/types').BaseNSCapabilities} BaseNSCapabilities
  * @typedef {import('axios').RawAxiosRequestConfig} RawAxiosRequestConfig
- * @typedef {import('@appium/types').SingularSessionData} SingularSessionData
+ */
+
+/**
+ * `Constraints` is purposefully loose here
+ * @template {Constraints} [C=Constraints]
+ * @typedef {import('@appium/types').SingularSessionData<C>} SingularSessionData
  */
 
 /**
@@ -442,18 +475,18 @@ export function driverE2ETestSuite(DriverClass, defaultCaps = {}) {
  */
 
 /**
- * @template {Constraints} [C=BaseDriverCapConstraints]
- * @template {StringRecord|void} [Extra=void]
+ * `Constraints` is purposefully loose here
+ * @template {Constraints} [C=Constraints]
  * @typedef NewSessionData
- * @property {import('type-fest').RequireAtLeastOne<import('@appium/types').W3CCapabilities<C, Extra>, 'firstMatch'|'alwaysMatch'>} capabilities
+ * @property {import('type-fest').RequireAtLeastOne<import('@appium/types').W3CCapabilities<C>, 'firstMatch'|'alwaysMatch'>} capabilities
  */
 
 /**
- * @template {Constraints} [C=BaseDriverCapConstraints]
- * @template {StringRecord|void} [Extra=void]
+ * `Constraints` is purposefully loose here
+ * @template {Constraints} [C=Constraints]
  * @typedef NewSessionResponse
  * @property {string} sessionId,
- * @property {import('@appium/types').Capabilities<C, Extra>} capabilities
+ * @property {import('@appium/types').Capabilities<C>} capabilities
  */
 
 /**

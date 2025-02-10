@@ -9,25 +9,35 @@ permissions:
   contents: read
 
 jobs:
+  prepare_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.generate-matrix.outputs.active }}
+    steps:
+    - name: Select all active LTS versions of Node.js
+      id: generate-matrix
+      uses: msimerson/node-lts-versions@v1
+
   check:
+    needs:
+    - prepare_matrix
     name: Check
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # node-version: [14.x, 16.x, 18.x]
-        node-version: [16.x, 18.x]
+        node-version: ${{ fromJSON(needs.prepare_matrix.outputs.versions) }}
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@64ed1c7eab4cce3362f8c340dee64e5eaeef8f7c # v3
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
       - name: Install Appium
         run: |
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            npm i -g $GITHUB_REF_NAME
+            npm i --location=global $GITHUB_REF_NAME
           else
-            npm i -g appium@next
+            npm i --location=global appium
           fi
         shell: bash
       - name: Install drivers and plugins

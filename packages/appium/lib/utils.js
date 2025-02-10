@@ -1,13 +1,24 @@
 import _ from 'lodash';
 import logger from './logger';
-import {processCapabilities, PROTOCOLS, STANDARD_CAPS} from '@appium/base-driver';
+import {
+  processCapabilities,
+  PROTOCOLS,
+  STANDARD_CAPS,
+  errors,
+} from '@appium/base-driver';
 import {inspect as dump} from 'util';
-import {node} from '@appium/support';
+import {node, fs} from '@appium/support';
 import path from 'path';
-import {SERVER_SUBCOMMAND, DRIVER_TYPE, PLUGIN_TYPE} from './constants';
+import {SERVER_SUBCOMMAND, DRIVER_TYPE, PLUGIN_TYPE, SETUP_SUBCOMMAND} from './constants';
+import os from 'node:os';
 
 const W3C_APPIUM_PREFIX = 'appium';
 const STANDARD_CAPS_LOWERCASE = new Set([...STANDARD_CAPS].map((cap) => cap.toLowerCase()));
+export const V4_BROADCAST_IP = '0.0.0.0';
+export const V6_BROADCAST_IP = '::';
+export const npmPackage = fs.readPackageJsonFrom(__dirname);
+const ALL_DRIVERS_MATCH = '*';
+const FEATURE_NAME_SEPARATOR = ':';
 
 /**
  *
@@ -19,11 +30,23 @@ const STANDARD_CAPS_LOWERCASE = new Set([...STANDARD_CAPS].map((cap) => cap.toLo
 const isStdoutTTY = process.stdout.isTTY;
 
 /**
+ * Creates an error object in case a session gets incompatible capabilities as the input.
+ *
+ * @returns {Error}
+ */
+export function makeNonW3cCapsError() {
+  return new errors.SessionNotCreatedError(
+    'Session capabilities format must comply to the W3C standard. Make sure your client is up to date. ' +
+    'See https://www.w3.org/TR/webdriver/#new-session for more details.'
+  );
+}
+
+/**
  * Dumps to value to the console using `info` logger.
  *
  * @todo May want to force color to be `false` if {@link isStdoutTTY} is `false`.
  */
-const inspect = _.flow(
+export const inspect = _.flow(
   _.partialRight(
     /** @type {(object: any, options: import('util').InspectOptions) => string} */ (dump),
     {colors: true, depth: null, compact: !isStdoutTTY}
@@ -45,7 +68,7 @@ const inspect = _.flow(
  * @param {NSCapabilities<C>} [defaultCapabilities]
  * @returns {ParsedDriverCaps<C,J>|InvalidCaps<C,J>}
  */
-function parseCapsForInnerDriver(
+export function parseCapsForInnerDriver(
   jsonwpCapabilities,
   w3cCapabilities,
   constraints = /** @type {C} */ ({}),
@@ -65,7 +88,7 @@ function parseCapsForInnerDriver(
   if (!hasW3CCaps) {
     return /** @type {InvalidCaps<C>} */ ({
       protocol: PROTOCOLS.W3C,
-      error: new Error('W3C capabilities should be provided'),
+      error: makeNonW3cCapsError(),
     });
   }
 
@@ -165,7 +188,7 @@ function parseCapsForInnerDriver(
  * @param {Capabilities<C>} caps - Desired capabilities object
  * @returns {NSCapabilities<C>}
  */
-function insertAppiumPrefixes(caps) {
+export function insertAppiumPrefixes(caps) {
   return /** @type {NSCapabilities<C>} */ (
     _.mapKeys(caps, (_, key) =>
       STANDARD_CAPS_LOWERCASE.has(key.toLowerCase()) || key.includes(':')
@@ -180,7 +203,7 @@ function insertAppiumPrefixes(caps) {
  * @param {NSCapabilities<C>} caps
  * @returns {Capabilities<C>}
  */
-function removeAppiumPrefixes(caps) {
+export function removeAppiumPrefixes(caps) {
   return /** @type {Capabilities<C>} */ (_.mapKeys(caps, (_, key) => removeAppiumPrefix(key)));
 }
 
@@ -198,7 +221,7 @@ function removeAppiumPrefix(key) {
  * @param {string} pkgName
  * @returns {string|undefined}
  */
-function getPackageVersion(pkgName) {
+export function getPackageVersion(pkgName) {
   const pkgInfo = require(`${pkgName}/package.json`) || {};
   return pkgInfo.version;
 }
@@ -210,7 +233,7 @@ function getPackageVersion(pkgName) {
  * for more details.
  * @returns {void}
  */
-function adjustNodePath() {
+export function adjustNodePath() {
   const selfRoot = node.getModuleRootSync('appium', __filename);
   if (!selfRoot || path.dirname(selfRoot).length >= selfRoot.length) {
     return;
@@ -223,10 +246,11 @@ function adjustNodePath() {
       // ! statements in client modules. It uses a private API though,
       // ! so it could break (maybe, eventually).
       // See https://gist.github.com/branneman/8048520#7-the-hack
-      // @ts-ignore
+      // @ts-ignore see above comment
+
       require('module').Module._initPaths();
       return true;
-    } catch (e) {
+    } catch {
       return false;
     }
   };
@@ -259,11 +283,18 @@ function adjustNodePath() {
 /**
  * Pulls the initial values of Appium settings from the given capabilities argument.
  * Each setting item must satisfy the following format:
- * `setting[setting_name]: setting_value`
+ * `settings[setting_name]: setting_value`
+ * or
+ * ```
+ * settings = {
+ *   setting_name1: 'setting_value1',
+ *   setting_name2: 'setting_value2',
+ * }
+ * ```
  * The capabilities argument itself gets mutated, so it does not contain parsed
  * settings anymore to avoid further parsing issues.
  * Check
- * https://github.com/appium/appium/blob/master/docs/en/advanced-concepts/settings.md
+ * https://appium.io/docs/en/latest/guides/settings/
  * for more details on the available settings.
  *
  * @param {?Object} caps - Capabilities dictionary. It is mutated if
@@ -272,20 +303,25 @@ function adjustNodePath() {
  * setting items or a dictionary containing parsed Appium setting names along with
  * their values.
  */
-function pullSettings(caps) {
+export function pullSettings(caps) {
   if (!_.isPlainObject(caps) || _.isEmpty(caps)) {
     return {};
   }
 
   const result = {};
+  const singleSettings = {};
   for (const [key, value] of _.toPairs(caps)) {
-    const match = /\bsettings\[(\S+)\]$/.exec(key);
-    if (!match) {
-      continue;
+    let match;
+    if (/^(s|appium:s)ettings$/.test(key) && _.isPlainObject(value)) {
+      Object.assign(result, value);
+      delete caps[key];
+    } else if ((match = /^(s|appium:s)ettings\[(\S+)\]$/.exec(key))) {
+      singleSettings[match[2]] = value;
+      delete caps[key];
     }
-
-    result[match[1]] = value;
-    delete caps[key];
+  }
+  if (!_.isEmpty(singleSettings)) {
+    Object.assign(result, singleSettings);
   }
   return result;
 }
@@ -298,6 +334,16 @@ function pullSettings(caps) {
  */
 export function isServerCommandArgs(args) {
   return args.subcommand === SERVER_SUBCOMMAND;
+}
+
+/**
+ * @template {CliCommand} Cmd
+ * @template {CliExtensionSubcommand|CliCommandSetupSubcommand|void} [SubCmd=void]
+ * @param {Args<Cmd, SubCmd>} args
+ * @returns {args is Args<SetupCommand>}
+ */
+export function isSetupCommandArgs(args) {
+  return args.subcommand === SETUP_SUBCOMMAND;
 }
 
 /**
@@ -330,15 +376,123 @@ export function isPluginCommandArgs(args) {
   return args.subcommand === PLUGIN_TYPE;
 }
 
-export {
-  inspect,
-  parseCapsForInnerDriver,
-  insertAppiumPrefixes,
-  getPackageVersion,
-  pullSettings,
-  removeAppiumPrefixes,
-  adjustNodePath,
-};
+/**
+ * Fetches the list of matched network interfaces of the current host.
+ *
+ * @param {4|6|null} family Either 4 to include ipv4 addresses only,
+ * 6 to include ipv6 addresses only, or null to include all of them
+ * @returns {os.NetworkInterfaceInfo[]} The list of matched interfcaes
+ */
+export function fetchInterfaces (family = null) {
+  let familyValue = null;
+  // 'IPv4' is in Node <= 17, from 18 it's a number 4 or 6
+  if (family === 4) {
+    familyValue = [4, 'IPv4'];
+  } else if (family === 6) {
+    familyValue = [6, 'IPv6'];
+  }
+  // @ts-ignore The linter does not understand the below filter
+  return _.flatMap(_.values(os.networkInterfaces()).filter(Boolean))
+    // @ts-ignore The linter does not understand the above filter
+    .filter(({family}) => !familyValue || familyValue && familyValue.includes(family));
+}
+
+/**
+ * https://github.com/SheetJS/js-adler32
+ *
+ * @param {string} str
+ * @param {number?} [seed]
+ * @returns {number}
+ */
+export function adler32(str, seed = null) {
+	let a = 1, b = 0, L = str.length, M = 0, c = 0, d = 0;
+	if (typeof seed === 'number') {
+    a = seed & 0xFFFF;
+    b = seed >>> 16;
+  }
+	for (let i = 0; i < L;) {
+		M = Math.min(L - i, 2918);
+		while (M > 0) {
+			c = str.charCodeAt(i++);
+			if (c < 0x80) {
+        a += c;
+      }
+			else if (c < 0x800) {
+				a += 192 | ((c >> 6) & 31);
+        b += a;
+        --M;
+				a += 128 | (c & 63);
+			} else if (c >= 0xD800 && c < 0xE000) {
+				c = (c & 1023) + 64;
+        d = str.charCodeAt(i++) & 1023;
+				a += 240 | ((c >> 8) & 7);
+        b += a;
+        --M;
+				a += 128 | ((c >> 2) & 63);
+        b += a;
+        --M;
+				a += 128 | ((d >> 6) & 15) | ((c & 3) << 4);
+        b += a;
+        --M;
+				a += 128 | (d & 63);
+			} else {
+				a += 224 | ((c >> 12) & 15);
+        b += a;
+        --M;
+				a += 128 | ((c >> 6) & 63);
+        b += a;
+        --M;
+				a += 128 | (c & 63);
+			}
+			b += a;
+      --M;
+		}
+		a = (15 * (a >>> 16) + (a & 65535));
+		b = (15 * (b >>> 16) + (b & 65535));
+	}
+	return ((b % 65521) << 16) | (a % 65521);
+}
+
+/**
+ * Checks if the provided address is a broadcast one.
+ *
+ * @param {string} address
+ * @returns {boolean}
+ */
+export function isBroadcastIp(address) {
+  return [V4_BROADCAST_IP, V6_BROADCAST_IP, `[${V6_BROADCAST_IP}]`].includes(address);
+}
+
+/**
+ * Validates the list of allowed/denied server features
+ *
+ * @param {string[]} features
+ * @returns {string[]}
+ */
+export function validateFeatures(features) {
+  const validator = (/** @type {string} */ fullName) => {
+    const separatorPos = fullName.indexOf(FEATURE_NAME_SEPARATOR);
+    // TODO: This is for the backward compatibility with Appium2
+    // TODO: In Appium3 the separator will be mandatory
+    if (separatorPos < 0) {
+      return `${ALL_DRIVERS_MATCH}${FEATURE_NAME_SEPARATOR}${fullName}`;
+    }
+
+    const [automationName, featureName] = [
+      fullName.substring(0, separatorPos),
+      fullName.substring(separatorPos + 1)
+    ];
+    if (!automationName || !featureName) {
+      throw new Error(
+        `The full feature name must include both the destination automation name or the ` +
+        `'${ALL_DRIVERS_MATCH}' wildcard to apply the feature to all installed drivers, and ` +
+        `the feature name split by a colon, got '${fullName}' instead`
+      );
+    }
+    return fullName;
+  };
+  return features.map(validator);
+}
 
 /**
  * @typedef {import('@appium/types').StringRecord} StringRecord
@@ -368,21 +522,18 @@ export {
  */
 
 /**
- * @template {Constraints} [C=BaseDriverCapConstraints]
- * @template {StringRecord|void} [Extra=void]
- * @typedef {import('@appium/types').Capabilities<C, Extra>} Capabilities
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').Capabilities<C>} Capabilities
  */
 
 /**
- * @template {Constraints} [C=BaseDriverCapConstraints]
- * @template {StringRecord|void} [Extra=void]
- * @typedef {import('@appium/types').W3CCapabilities<C, Extra>} W3CCapabilities
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').W3CCapabilities<C>} W3CCapabilities
  */
 
 /**
- * @template {Constraints} [C=BaseDriverCapConstraints]
- * @template {StringRecord|void} [Extra=void]
- * @typedef {import('@appium/types').NSCapabilities<C, Extra>} NSCapabilities
+ * @template {Constraints} C
+ * @typedef {import('@appium/types').NSCapabilities<C>} NSCapabilities
  */
 
 /**
@@ -403,19 +554,21 @@ export {
  * @typedef {import('appium/types').CliCommand} CliCommand
  * @typedef {import('appium/types').CliExtensionSubcommand} CliExtensionSubcommand
  * @typedef {import('appium/types').CliExtensionCommand} CliExtensionCommand
+ * @typedef {import('appium/types').CliCommandSetupSubcommand} CliCommandSetupSubcommand
  * @typedef {import('appium/types').CliCommandServer} ServerCommand
  * @typedef {import('appium/types').CliCommandDriver} DriverCommand
  * @typedef {import('appium/types').CliCommandPlugin} PluginCommand
+ * @typedef {import('appium/types').CliCommandSetup} SetupCommand
  */
 
 /**
  * @template {CliCommand} [Cmd=ServerCommand]
- * @template {CliExtensionSubcommand|void} [SubCmd=void]
+ * @template {CliExtensionSubcommand|CliCommandSetupSubcommand|void} [SubCmd=void]
  * @typedef {import('appium/types').Args<Cmd, SubCmd>} Args
  */
 
 /**
  * @template {CliCommand} [Cmd=ServerCommand]
- * @template {CliExtensionSubcommand|void} [SubCmd=void]
+ * @template {CliExtensionSubcommand|CliCommandSetupSubcommand|void} [SubCmd=void]
  * @typedef {import('appium/types').ParsedArgs<Cmd, SubCmd>} ParsedArgs
  */

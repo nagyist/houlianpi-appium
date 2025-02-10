@@ -4,8 +4,8 @@
  */
 
 import _ from 'lodash';
+import {SpawnOptions, spawn} from 'node:child_process';
 import path from 'node:path';
-import type {SubProcess} from 'teen_process';
 
 /**
  * Computes a relative path, prepending `./`
@@ -25,13 +25,16 @@ export function stopwatch(id: string) {
   const start = Date.now();
   stopwatch.cache.set(id, start);
   return () => {
-    const result = Date.now() - stopwatch.cache.get(id)!;
+    const result = Date.now() - (stopwatch.cache.get(id) ?? 0);
     stopwatch.cache.delete(id);
     return result;
   };
 }
 stopwatch.cache = new Map<string, number>();
 
+/**
+ * Converts a tuple to an object; use for extracting parameter types from a function signature
+ */
 export type TupleToObject<
   T extends readonly any[],
   M extends Record<Exclude<keyof T, keyof any[]>, PropertyKey>
@@ -55,22 +58,40 @@ export const isStringArray = _.overEvery(_.isArray, _.partial(_.every, _, _.isSt
 export const argify: (obj: Record<string, string | number | boolean | undefined>) => string[] =
   _.flow(
     _.entries,
-    _.flatten,
     (list) =>
-      list.map((value, idx) => {
+      list.map(([key, value]) => {
         if (value === true) {
-          return `--${value}`;
+          return [`--${key}`];
         } else if (value === false || value === undefined) {
           return;
         }
-        return idx % 2 === 0 ? `--${value}` : value;
+        return [`--${key}`, value];
       }),
-    _.compact
+    _.flatten
   );
 
 /**
- * Conversion of the parameters of {@linkcode Subprocess.start} to an object.
+ * Spawns a long-running "background" child process.  This is expected to only return control to the
+ * parent process in the case of a nonzero exit code from the child process.
+ * @param command Command to run
+ * @param args Args to pass to command
+ * @param opts Spawn options. `{stdio: 'inherit'}` will always be true
+ * @privateRemarks `teen_process` is good for running a one-shot command, but not so great for
+ * background tasks; we use node's `child_process` directly here to pass `stdio` through, since
+ * `teen_process` basically does not respect `{stdio: 'inherit'}`.
  */
-export type TeenProcessSubprocessStartOpts = Partial<
-  TupleToObject<Parameters<SubProcess['start']>, ['startDetector', 'detach', 'timeoutMs']>
->;
+export async function spawnBackgroundProcess(command: string, args: string[], opts: SpawnOptions) {
+  return new Promise<void>((resolve, reject) => {
+    spawn(command, args, {...opts, stdio: 'inherit'})
+      .on('error', reject)
+      .on('close', (code) => {
+        // can be null or number
+        if (code) {
+          return reject(new Error(`${command} exited with code ${code}`));
+        }
+        resolve();
+      });
+  });
+}
+
+export type SpawnBackgroundProcessOpts = Omit<SpawnOptions, 'stdio'>;

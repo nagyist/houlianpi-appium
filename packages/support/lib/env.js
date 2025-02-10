@@ -3,8 +3,7 @@ import _ from 'lodash';
 import {homedir} from 'os';
 import path from 'path';
 import readPkg from 'read-pkg';
-import {npm} from './npm';
-import log from './logger';
+import * as semver from 'semver';
 
 /**
  * Path to the default `APPIUM_HOME` dir (`~/.appium`).
@@ -29,8 +28,6 @@ export const MANIFEST_RELATIVE_PATH = path.join(
   MANIFEST_BASENAME
 );
 
-const OLD_VERSION_REGEX = /^[01]/;
-
 /**
  * Resolves `true` if an `appium` dependency can be found somewhere in the given `cwd`.
  *
@@ -49,52 +46,43 @@ export async function hasAppiumDependency(cwd) {
 export const findAppiumDependencyPackage = _.memoize(
   /**
    * @param {string} [cwd]
+   * @param {string|semver.Range} [acceptableVersionRange='>=2.0.0-beta'] The expected
+   * semver-compatible range for the Appium dependency. Packages that have 'appium' dependency
+   * not satisfying this range will be skipped.
    * @returns {Promise<string|undefined>}
    */
-  async (cwd = process.cwd()) => {
+  async function findAppiumDependencyPackage (
+    cwd = process.cwd(),
+    acceptableVersionRange = '>=2.0.0-beta'
+  ) {
     /**
-     * Tries to read `package.json` in `cwd` and resolves the identity if it depends on `appium`;
+     * Tries to read `package.json` in `root` and resolves the identity if it depends on `appium`;
      * otherwise resolves `undefined`.
-     * @param {string} cwd
+     * @param {string} root
      * @returns {Promise<string|undefined>}
      */
-    const readPkg = async (cwd) => {
-      /** @type {string|undefined} */
-      let pkgPath;
+    const readPkg = async (root) => {
       try {
-        const pkg = await readPackageInDir(cwd);
-        const version =
+        const pkg = await readPackageInDir(root);
+        const version = semver.minVersion(String(
           pkg?.dependencies?.appium ??
           pkg?.devDependencies?.appium ??
-          pkg?.peerDependencies?.appium;
-        pkgPath = version && !OLD_VERSION_REGEX.test(String(version)) ? cwd : undefined;
+          pkg?.peerDependencies?.appium
+        ));
+        return version && semver.satisfies(version, acceptableVersionRange) ? root : undefined;
       } catch {}
-      if (pkgPath) {
-        log.debug(`Found package.json having current Appium dep in ${pkgPath}`);
-      } else {
-        log.debug(`No package.json having current Appium dep in ${cwd}`);
-      }
-      return pkgPath;
     };
 
-    cwd = path.resolve(cwd);
-
-    /** @type {string} */
-    let pkgDir;
-    try {
-      const {json: list} = await npm.exec('list', ['--long', '--json'], {cwd});
-      ({path: pkgDir} = list);
-      if (pkgDir !== cwd) {
-        if (pkgDir) {
-          log.debug(`Determined package/workspace root from ${cwd} => ${pkgDir}`);
-        } else {
-          pkgDir = cwd;
-        }
+    let currentDir = path.resolve(cwd);
+    let isAtFsRoot = false;
+    while (!isAtFsRoot) {
+      const result = await readPkg(currentDir);
+      if (result) {
+        return result;
       }
-    } catch {
-      pkgDir = cwd;
+      currentDir = path.dirname(currentDir);
+      isAtFsRoot = currentDir.length <= path.dirname(currentDir).length;
     }
-    return await readPkg(pkgDir);
   }
 );
 
@@ -131,16 +119,10 @@ export const resolveAppiumHome = _.memoize(
     }
 
     if (process.env.APPIUM_HOME) {
-      log.debug(`Using APPIUM_HOME from env: ${process.env.APPIUM_HOME}`);
       return path.resolve(cwd, process.env.APPIUM_HOME);
     }
 
-    const pkgPath = await findAppiumDependencyPackage(cwd);
-    if (pkgPath) {
-      return pkgPath;
-    }
-    log.debug(`Using default APPIUM_HOME: ${DEFAULT_APPIUM_HOME}`);
-    return DEFAULT_APPIUM_HOME;
+    return await findAppiumDependencyPackage(cwd) ?? DEFAULT_APPIUM_HOME;
   }
 );
 

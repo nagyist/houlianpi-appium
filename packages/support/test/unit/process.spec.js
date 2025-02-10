@@ -1,12 +1,20 @@
 import * as teenProcess from 'teen_process';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
-import {process} from '../../lib/index.js';
+import {process, system} from '../../lib';
 import {retryInterval} from 'asyncbox';
 
 const SubProcess = teenProcess.SubProcess;
 
 describe('process', function () {
   let sandbox;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();
@@ -19,11 +27,16 @@ describe('process', function () {
   describe('getProcessIds', function () {
     let proc;
     before(async function () {
+      if (system.isWindows()) {
+        return this.skip();
+      }
       proc = new SubProcess('tail', ['-f', __filename]);
       await proc.start();
     });
     after(async function () {
-      await proc.stop();
+      if (proc) {
+        await proc.stop();
+      }
     });
     it('should get return an array for existing process', async function () {
       let pids = await process.getProcessIds('tail');
@@ -49,6 +62,11 @@ describe('process', function () {
 
   describe('killProcess', function () {
     let proc;
+    before(function () {
+      if (system.isWindows()) {
+        return this.skip();
+      }
+    });
     beforeEach(async function () {
       proc = new SubProcess('tail', ['-f', __filename]);
       await proc.start();
@@ -63,7 +81,7 @@ describe('process', function () {
       await process.killProcess('tail');
 
       // it may take a moment to actually be registered as killed
-      // eslint-disable-next-line require-await
+
       await retryInterval(10, 100, async () => {
         proc.isRunning.should.be.false;
       });
@@ -71,7 +89,7 @@ describe('process', function () {
     it('should do nothing if the process does not exist', async function () {
       proc.isRunning.should.be.true;
       await process.killProcess('asdfasdfasdf');
-      // eslint-disable-next-line require-await
+
       await retryInterval(10, 100, async () => {
         proc.isRunning.should.be.false;
       }).should.eventually.be.rejected;

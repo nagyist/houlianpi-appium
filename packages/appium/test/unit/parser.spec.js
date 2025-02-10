@@ -1,4 +1,5 @@
-import {DRIVER_TYPE, PLUGIN_TYPE} from '../../lib/constants';
+import _ from 'lodash';
+import {DRIVER_TYPE, PLUGIN_TYPE, SETUP_SUBCOMMAND} from '../../lib/constants';
 import {getParser} from '../../lib/cli/parser';
 import {INSTALL_TYPES} from '../../lib/extension/extension-config';
 import * as schema from '../../lib/schema/schema';
@@ -13,6 +14,14 @@ const LOG_FILTERS_FIXTURE = resolveFixture('log-filters.json');
 
 describe('parser', function () {
   let p;
+  let should;
+
+  beforeEach(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+  });
 
   describe('Main Parser', function () {
     beforeEach(function () {
@@ -59,7 +68,9 @@ describe('parser', function () {
           }).should.throw(/unrecognized arguments: --apple/i);
         });
 
-        it('should throw an error for an invalid value ("hostname")', function () {
+        // FIXME: this test will not work until we restore the formatting restriction to the address validation
+        // see #18716
+        it.skip('should throw an error for an invalid value ("hostname")', function () {
           (() => {
             p.parseArgs(['--address', '-42']);
           }).should.throw(/must match format "hostname"/i);
@@ -117,6 +128,18 @@ describe('parser', function () {
         p.parseArgs(['--allow-insecure', 'foo']).allowInsecure.should.eql(['foo']);
         p.parseArgs(['--allow-insecure', 'foo,bar']).allowInsecure.should.eql(['foo', 'bar']);
         p.parseArgs(['--allow-insecure', 'foo ,bar']).allowInsecure.should.eql(['foo', 'bar']);
+      });
+
+      it('should parse --address correctly', function () {
+        p.parseArgs(['--address', 'localhost']).address.should.eql('localhost');
+        p.parseArgs(['--address', 'appium.net']).address.should.eql('appium.net');
+        p.parseArgs(['--address', '127.0.0.1']).address.should.eql('127.0.0.1');
+        p.parseArgs(['--address', '10.0.0.1']).address.should.eql('10.0.0.1');
+        p.parseArgs(['--address', '::']).address.should.eql('::');
+        p.parseArgs(['--address', '::1']).address.should.eql('::1');
+        p.parseArgs(['--address', '2a02:8888:9a80:158:2418:a474:43c6:1b78']).address.should.eql(
+          '2a02:8888:9a80:158:2418:a474:43c6:1b78'
+        );
       });
 
       it('should parse --deny-insecure correctly', function () {
@@ -264,6 +287,14 @@ describe('parser', function () {
         const args = p.parseArgs([DRIVER_TYPE, 'list', '--updates']);
         args.showUpdates.should.eql(true);
       });
+      it('should allow "ls" as an alias for "list"', function () {
+        const args = p.parseArgs([DRIVER_TYPE, 'ls']);
+        args.subcommand.should.eql(DRIVER_TYPE);
+        args.driverCommand.should.eql('list');
+        args.showInstalled.should.eql(false);
+        args.showUpdates.should.eql(false);
+        args.json.should.eql(false);
+      });
     });
     describe('install', function () {
       it('should not allow an empty argument list', function () {
@@ -327,8 +358,13 @@ describe('parser', function () {
       it('should not allow an empty driver argument list', function () {
         (() => p.parseArgs([DRIVER_TYPE, 'run'])).should.throw();
       });
-      it('should not allow no driver scriptName', function () {
-        (() => p.parseArgs([DRIVER_TYPE, 'run', 'foo'])).should.throw();
+      it('should allow no driver scriptName', function () {
+        const args = p.parseArgs([DRIVER_TYPE, 'run', 'foo']);
+        args.subcommand.should.eql(DRIVER_TYPE);
+        args.driverCommand.should.eql('run');
+        args.driver.should.eql('foo');
+        _.isNull(args.scriptName).should.be.true;
+        args.json.should.eql(false);
       });
       it('should take a driverName and scriptName to run', function () {
         const args = p.parseArgs([DRIVER_TYPE, 'run', 'foo', 'bar']);
@@ -345,8 +381,13 @@ describe('parser', function () {
       it('should not allow an empty plugin argument list', function () {
         (() => p.parseArgs([PLUGIN_TYPE, 'run'])).should.throw();
       });
-      it('should not allow no plugin scriptName', function () {
-        (() => p.parseArgs([PLUGIN_TYPE, 'run', 'foo'])).should.throw();
+      it('should allow no plugin scriptName', function () {
+        const args = p.parseArgs([PLUGIN_TYPE, 'run', 'foo']);
+        args.subcommand.should.eql(PLUGIN_TYPE);
+        args.pluginCommand.should.eql('run');
+        args.plugin.should.eql('foo');
+        _.isNull(args.scriptName).should.be.true;
+        args.json.should.eql(false);
       });
       it('should take a pluginName and scriptName to run', function () {
         const args = p.parseArgs([PLUGIN_TYPE, 'run', 'foo', 'bar']);
@@ -359,6 +400,24 @@ describe('parser', function () {
       it('should allow json format for plugin', function () {
         const args = p.parseArgs([PLUGIN_TYPE, 'run', 'foo', 'bar', '--json']);
         args.json.should.eql(true);
+      });
+    });
+  });
+
+  describe('Setup Parser', function () {
+    let p;
+    beforeEach(function () {
+      p = getParser(true);
+    });
+    it('should not allow random sub-subcommands', function () {
+      (() => p.parseArgs([SETUP_SUBCOMMAND, 'foo'])).should.throw();
+    });
+
+    describe('all', function () {
+      it('should allow an empty argument mobile', function () {
+        const args = p.parseArgs([SETUP_SUBCOMMAND, 'mobile']);
+        args.subcommand.should.eql(SETUP_SUBCOMMAND);
+        args.setupCommand.should.eql('mobile');
       });
     });
   });

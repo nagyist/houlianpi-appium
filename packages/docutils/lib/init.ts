@@ -5,22 +5,17 @@
  */
 
 import * as JSON5 from 'json5';
-import {
-  NAME_MKDOCS_YML,
-  NAME_TSCONFIG_JSON,
-  NAME_PYTHON,
-  REQUIREMENTS_TXT_PATH,
-  NAME_TYPEDOC_JSON,
-} from './constants';
+import {NAME_MKDOCS_YML, NAME_TSCONFIG_JSON, NAME_PYTHON, PIP_ENV_VARS, REQUIREMENTS_TXT_PATH} from './constants';
 import YAML from 'yaml';
 import {exec} from 'teen_process';
 import {Simplify} from 'type-fest';
 import {DocutilsError} from './error';
 import {createScaffoldTask, ScaffoldTaskOptions} from './scaffold';
-import logger from './logger';
-import {MkDocsYml, TsConfigJson, TypeDocJson} from './model';
+import type { ScaffoldTask } from './scaffold';
+import {getLogger} from './logger';
+import {MkDocsYml, TsConfigJson} from './model';
 import _ from 'lodash';
-import {stringifyJson5, stringifyYaml} from './fs';
+import {findPython, stringifyJson5, stringifyYaml} from './fs';
 
 /**
  * Data for the base `mkdocs.yml` file
@@ -29,18 +24,6 @@ const BASE_MKDOCS_YML: Readonly<MkDocsYml> = Object.freeze({
   INHERIT: './node_modules/@appium/docutils/base-mkdocs.yml',
   docs_dir: 'docs',
   site_dir: 'site',
-});
-
-/**
- * Data for the base `typedoc.json` file
- */
-const BASE_TYPEDOC_JSON: Readonly<TypeDocJson> = Object.freeze({
-  $schema: 'https://typedoc.org/schema.json',
-  cleanOutputDir: true,
-  entryPointStrategy: 'packages',
-  theme: 'appium',
-  readme: 'none',
-  entryPoints: ['.'],
 });
 
 /**
@@ -54,9 +37,12 @@ const BASE_TSCONFIG_JSON: Readonly<TsConfigJson> = Object.freeze({
   },
 });
 
-const log = logger.withTag('init');
-const dryRunLog = log.withTag('dry-run');
+const log = getLogger('init');
+const dryRunLog = getLogger('dry-run', log);
 
+/**
+ * Files included, by default, in `tsconfig.json`
+ */
 const DEFAULT_INCLUDE = ['lib', 'test', 'index.js'];
 /**
  * Function which scaffolds a `tsconfig.json` file
@@ -85,22 +71,13 @@ export const initTsConfigJson = createScaffoldTask<InitTsConfigOptions, TsConfig
     },
     deserialize: JSON5.parse,
     serialize: stringifyJson5,
-  }
-);
-
-/**
- * Function which scaffolds a `typedoc.json` file
- */
-export const initTypeDocJson = createScaffoldTask<InitTypeDocOptions, TypeDocJson>(
-  NAME_TYPEDOC_JSON,
-  BASE_TYPEDOC_JSON,
-  'TypeDoc configuration'
+  },
 );
 
 /**
  * Function which scaffolds an `mkdocs.yml` file
  */
-export const initMkDocs = createScaffoldTask<InitMkDocsOptions, MkDocsYml>(
+export const initMkDocs: ScaffoldTask<InitMkDocsOptions, MkDocsYml> = createScaffoldTask<InitMkDocsOptions, MkDocsYml>(
   NAME_MKDOCS_YML,
   BASE_MKDOCS_YML,
   'MkDocs configuration',
@@ -126,7 +103,9 @@ export const initMkDocs = createScaffoldTask<InitMkDocsOptions, MkDocsYml>(
       if (repoUrl && !repoName) {
         let {pathname} = new URL(repoUrl);
         pathname = pathname.slice(1);
-        let [owner, repo] = pathname.split('/');
+        const pathparts = pathname.split('/');
+        const owner = pathparts[0];
+        let repo = pathparts[1];
         repo = repo.replace(/\.git$/, '');
         repoName = [owner, repo].join('/');
         if (repoName) {
@@ -148,7 +127,7 @@ export const initMkDocs = createScaffoldTask<InitMkDocsOptions, MkDocsYml>(
         site_description: siteDescription,
       };
     },
-  }
+  },
 );
 
 /**
@@ -156,24 +135,39 @@ export const initMkDocs = createScaffoldTask<InitMkDocsOptions, MkDocsYml>(
  * @param opts Options
  */
 export async function initPython({
-  pythonPath = NAME_PYTHON,
+  pythonPath,
   dryRun = false,
+  upgrade = false,
 }: InitPythonOptions = {}): Promise<void> {
+  pythonPath = pythonPath ?? (await findPython()) ?? NAME_PYTHON;
+
   const args = ['-m', 'pip', 'install', '-r', REQUIREMENTS_TXT_PATH];
+  if (upgrade) {
+    args.push('--upgrade');
+  }
   if (dryRun) {
-    dryRunLog.info('Would execute command: %s %s', pythonPath, args.join(' '));
+    dryRunLog.info(
+      'Would execute command: %s %s (environment variables: %s)',
+      pythonPath,
+      args.join(' '),
+      PIP_ENV_VARS,
+    );
   } else {
-    log.debug('Executing command: %s %s', pythonPath, args.join(' '));
+    log.debug('Executing command: %s %s (environment variables: %s)',
+      pythonPath,
+      args.join(' '),
+      PIP_ENV_VARS,
+    );
     log.info('Installing Python dependencies...');
     try {
-      const result = await exec(pythonPath, args, {shell: true});
+      const result = await exec(pythonPath, args, {env: PIP_ENV_VARS, shell: true});
       const {code, stdout} = result;
       if (code !== 0) {
         throw new DocutilsError(`Could not install Python dependencies. Reason: ${stdout}`);
       }
     } catch (err) {
       throw new DocutilsError(
-        `Could not install Python dependencies. Reason: ${(err as Error).message}`
+        `Could not install Python dependencies. Reason: ${(err as Error).message}`,
       );
     }
   }
@@ -199,7 +193,6 @@ export interface InitMkDocsOptions extends ScaffoldTaskOptions {
  */
 export async function init({
   typescript,
-  typedoc,
   python,
   tsconfigJson: tsconfigJsonPath,
   packageJson: packageJsonPath,
@@ -214,15 +207,9 @@ export async function init({
   dryRun,
   cwd,
   pythonPath,
-  typedocJson: typeDocJsonPath,
+  upgrade,
 }: InitOptions = {}): Promise<void> {
-  if (!typescript && typedoc) {
-    log.warn(
-      'Initialization of tsconfig.json disabled. TypeDoc requires a tsconfig.json; please ensure it exists'
-    );
-  }
-
-  if (typescript) {
+  if (typescript && !upgrade) {
     await initTsConfigJson({
       dest: tsconfigJsonPath,
       packageJson: packageJsonPath,
@@ -233,21 +220,11 @@ export async function init({
     });
   }
 
-  if (typedoc) {
-    await initTypeDocJson({
-      dest: typeDocJsonPath,
-      packageJson: packageJsonPath,
-      overwrite,
-      dryRun,
-      cwd,
-    });
-  }
-
   if (python) {
-    await initPython({pythonPath, dryRun});
+    await initPython({pythonPath, dryRun, upgrade});
   }
 
-  if (mkdocs) {
+  if (mkdocs && !upgrade) {
     await initMkDocs({
       dest: mkdocsYmlPath,
       cwd,
@@ -262,7 +239,6 @@ export async function init({
   }
 }
 
-export interface InitTypeDocOptions extends ScaffoldTaskOptions {}
 export interface InitTsConfigOptions extends ScaffoldTaskOptions {
   /**
    * List of source files (globs supported); typically `src` or `lib`
@@ -274,6 +250,11 @@ export interface InitPythonOptions extends ScaffoldTaskOptions {
    * Path to `python` (v3.x) executable
    */
   pythonPath?: string;
+
+  /**
+   * If true, upgrade only
+   */
+  upgrade?: boolean;
 }
 
 /**
@@ -282,15 +263,11 @@ export interface InitPythonOptions extends ScaffoldTaskOptions {
  * The props of the various "path" options are rewritten as `dest` for the scaffold tasks functions.
  */
 export type InitOptions = Simplify<
-  Omit<InitPythonOptions & InitTsConfigOptions & InitTypeDocOptions & InitMkDocsOptions, 'dest'> & {
+  Omit<InitPythonOptions & InitTsConfigOptions & InitMkDocsOptions, 'dest'> & {
     /**
      * If `true` will initialize a `tsconfig.json` file
      */
     typescript?: boolean;
-    /**
-     * If `true` will initialize a `typedoc.json` file
-     */
-    typedoc?: boolean;
     /**
      * If `true` will install Python deps
      */
@@ -299,10 +276,6 @@ export type InitOptions = Simplify<
      * If `true` will initialize a `mkdocs.yml` file
      */
     mkdocs?: boolean;
-    /**
-     * Path to new or existing `typedoc.json` file
-     */
-    typedocJson?: string;
     /**
      * Path to new or existing `tsconfig.json` file
      */
@@ -315,5 +288,10 @@ export type InitOptions = Simplify<
      * Path to new or existing `mkdocs.yml` file
      */
     mkdocsYml?: string;
+
+    /**
+     * If `true`, upgrade only
+     */
+    upgrade?: boolean;
   }
 >;

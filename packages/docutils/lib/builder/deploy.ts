@@ -5,51 +5,50 @@
  */
 
 import _ from 'lodash';
-import {exec, SubProcess, TeenProcessExecOptions} from 'teen_process';
 import path from 'node:path';
+import {exec, TeenProcessExecOptions} from 'teen_process';
 import {
+  DEFAULT_DEPLOY_ALIAS_TYPE,
   DEFAULT_DEPLOY_BRANCH,
   DEFAULT_DEPLOY_REMOTE,
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
   NAME_BIN,
+  NAME_MIKE,
   NAME_MKDOCS_YML,
+  NAME_PYTHON,
 } from '../constants';
 import {DocutilsError} from '../error';
-import {findMkDocsYml, readPackageJson, whichMike} from '../fs';
-import logger from '../logger';
-import {argify, stopwatch, TeenProcessSubprocessStartOpts} from '../util';
+import {findMike, findMkDocsYml, findPython, readPackageJson} from '../fs';
+import {getLogger} from '../logger';
+import {argify, spawnBackgroundProcess, SpawnBackgroundProcessOpts, stopwatch} from '../util';
 
-const log = logger.withTag('builder:deploy');
+const log = getLogger('builder:deploy');
 
 /**
  * Runs `mike serve`
+ * @param mikePath Path to `mike` executable
  * @param args Extra args to `mike build`
  * @param opts Extra options for `teen_process.Subprocess.start`
- * @param mikePath Path to `mike` executable
  */
 async function doServe(
+  mikePath: string,
   args: string[] = [],
-  {startDetector, detach, timeoutMs}: TeenProcessSubprocessStartOpts = {},
-  mikePath?: string
+  opts: SpawnBackgroundProcessOpts = {},
 ) {
-  mikePath = mikePath ?? (await whichMike());
   const finalArgs = ['serve', ...args];
-  log.debug('Launching %s with args: %O', mikePath, finalArgs);
-  const proc = new SubProcess(mikePath, finalArgs);
-  return await proc.start(startDetector, detach, timeoutMs);
+  return spawnBackgroundProcess(mikePath, finalArgs, opts);
 }
 
 /**
  * Runs `mike build`
+ * @param mikePath Path to `mike` executable
  * @param args Extra args to `mike build`
  * @param opts Extra options to `teen_process.exec`
- * @param mikePath Path to `mike` executable
  */
-async function doDeploy(args: string[] = [], opts: TeenProcessExecOptions = {}, mikePath?: string) {
-  mikePath = mikePath ?? (await whichMike());
+async function doDeploy(mikePath: string, args: string[] = [], opts: TeenProcessExecOptions = {}) {
   const finalArgs = ['deploy', ...args];
-  log.debug('Launching %s with args: %O', mikePath, finalArgs);
+  log.debug('Executing %s via: %s %O', NAME_MIKE, mikePath, finalArgs);
   return await exec(mikePath, finalArgs, opts);
 }
 
@@ -63,10 +62,17 @@ async function findDeployVersion(packageJsonPath?: string, cwd = process.cwd()):
   const version = pkg.version;
   if (!version) {
     throw new DocutilsError(
-      'No "version" field found in package.json; please add one or specify a version to deploy'
+      'No "version" field found in package.json; please add one or specify a version to deploy',
     );
   }
-  return version;
+
+  // return MAJOR.MINOR as the version by default, if that is a thing we can extract, otherwise
+  // just return the version as is
+  const versionParts = version.split('.');
+  if (versionParts.length === 1) {
+    return version;
+  }
+  return `${versionParts[0]}.${versionParts[1]}`;
 }
 
 /**
@@ -82,60 +88,79 @@ export async function deploy({
   push = false,
   branch = DEFAULT_DEPLOY_BRANCH,
   remote = DEFAULT_DEPLOY_REMOTE,
-  prefix,
+  deployPrefix,
   message,
   alias,
-  rebase = true,
+  aliasType = DEFAULT_DEPLOY_ALIAS_TYPE,
   port = DEFAULT_SERVE_PORT,
   host = DEFAULT_SERVE_HOST,
   serveOpts,
   execOpts,
 }: DeployOpts = {}) {
   const stop = stopwatch('deploy');
+
+  const pythonPath = await findPython();
+
+  if (!pythonPath) {
+    throw new DocutilsError(
+      `Could not find ${NAME_PYTHON}3/${NAME_PYTHON} executable in PATH; please install Python v3`,
+    );
+  }
+
   mkDocsYmlPath = mkDocsYmlPath ?? (await findMkDocsYml(cwd));
   if (!mkDocsYmlPath) {
     throw new DocutilsError(
-      `Could not find ${NAME_MKDOCS_YML} from ${cwd}; run "${NAME_BIN} init" to create it`
+      `Could not find ${NAME_MKDOCS_YML} from ${cwd}; run "${NAME_BIN} init" to create it`,
     );
   }
   version = version ?? (await findDeployVersion(packageJsonPath, cwd));
+
+  // substitute %s in message with version
+  message = message?.replace('%s', version);
+
   const mikeOpts = {
     'config-file': mkDocsYmlPath,
     push,
     remote,
     branch,
-    prefix,
+    'deploy-prefix': deployPrefix,
     message,
-    rebase,
     port,
     host,
   };
+
+  const mikePath = await findMike();
+  if (!mikePath) {
+    throw new DocutilsError(
+      `Could not find ${NAME_MIKE} executable; please run "${NAME_BIN} init"`,
+    );
+  }
   if (serve) {
     const mikeArgs = [
       ...argify(_.pickBy(mikeOpts, (value) => _.isNumber(value) || Boolean(value))),
-      version,
     ];
-    if (alias) {
-      mikeArgs.push(alias);
-    }
+    stop(); // discard
     // unsure about how SIGHUP is handled here
-    await doServe(mikeArgs, serveOpts);
+    await doServe(mikePath, mikeArgs, serveOpts);
   } else {
+    log.info('Deploying into branch %s', branch);
     const mikeArgs = [
       ...argify(
         _.omitBy(
           mikeOpts,
-          (value, key) => _.includes(['port', 'host'], key) || (!_.isNumber(value) && !value)
-        )
+          (value, key) => _.includes(['port', 'host'], key) || (!_.isNumber(value) && !value),
+        ),
       ),
-      version,
     ];
     if (alias) {
-      mikeArgs.push(alias);
+      mikeArgs.push('--update-aliases', '--alias-type', aliasType);
+      mikeArgs.push(version, alias);
+    } else {
+      mikeArgs.push(version);
     }
-    await doDeploy(mikeArgs, execOpts);
+    await doDeploy(mikePath, mikeArgs, execOpts);
 
-    log.success('Mike finished deployment into branch %s (%dms)', branch, stop());
+    log.success('Finished deployment into branch %s (%dms)', branch, stop());
   }
 }
 
@@ -183,7 +208,7 @@ export interface DeployOpts {
   /**
    * Subdirectory within `branch` to deploy to
    */
-  prefix?: string;
+  deployPrefix?: string;
   /**
    * Commit message
    */
@@ -197,9 +222,9 @@ export interface DeployOpts {
    */
   alias?: string;
   /**
-   * If `true`, rebase `branch` before pushing
+   * The approach for creating build alias (`symlink`, `redirect` or `copy`)
    */
-  rebase?: boolean;
+  aliasType?: string;
   /**
    * Port to serve on
    * @defaultValue 8000
@@ -217,7 +242,7 @@ export interface DeployOpts {
   execOpts?: TeenProcessExecOptions;
 
   /**
-   * Extra options for {@linkcode teen_process.Subprocess.start}
+   * Extra options for {@linkcode spawnBackgroundProcess}
    */
-  serveOpts?: TeenProcessSubprocessStartOpts;
+  serveOpts?: SpawnBackgroundProcessOpts;
 }

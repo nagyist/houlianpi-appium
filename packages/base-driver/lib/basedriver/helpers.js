@@ -2,24 +2,33 @@ import _ from 'lodash';
 import path from 'path';
 import url from 'url';
 import logger from './logger';
-import {tempDir, fs, util, zip, net, timing, node} from '@appium/support';
-import LRU from 'lru-cache';
+import {tempDir, fs, util, zip, timing, node} from '@appium/support';
+import { LRUCache } from 'lru-cache';
 import AsyncLock from 'async-lock';
 import axios from 'axios';
+import B from 'bluebird';
 
+// for compat with running tests transpiled and in-place
+export const {version: BASEDRIVER_VER} = fs.readPackageJsonFrom(__dirname);
 const IPA_EXT = '.ipa';
-const ZIP_EXTS = ['.zip', IPA_EXT];
+const ZIP_EXTS = new Set(['.zip', IPA_EXT]);
 const ZIP_MIME_TYPES = ['application/zip', 'application/x-zip-compressed', 'multipart/x-zip'];
-const CACHED_APPS_MAX_AGE = 1000 * 60 * 60 * 24; // ms
-const MAX_CACHED_APPS = 1024;
-const APPLICATIONS_CACHE = new LRU({
+const CACHED_APPS_MAX_AGE_MS = 1000 * 60 * toNaturalNumber(60 * 24, 'APPIUM_APPS_CACHE_MAX_AGE');
+const MAX_CACHED_APPS = toNaturalNumber(1024, 'APPIUM_APPS_CACHE_MAX_ITEMS');
+const HTTP_STATUS_NOT_MODIFIED = 304;
+const DEFAULT_REQ_HEADERS = Object.freeze({
+  'user-agent': `Appium (BaseDriver v${BASEDRIVER_VER})`,
+});
+const AVG_DOWNLOAD_SPEED_MEASUREMENT_THRESHOLD_SEC = 2;
+/** @type {LRUCache<string, import('@appium/types').CachedAppInfo>} */
+const APPLICATIONS_CACHE = new LRUCache({
   max: MAX_CACHED_APPS,
-  ttl: CACHED_APPS_MAX_AGE, // expire after 24 hours
+  ttl: CACHED_APPS_MAX_AGE_MS, // expire after 24 hours
   updateAgeOnGet: true,
-  dispose: (app, {fullPath}) => {
+  dispose: ({fullPath}, app) => {
     logger.info(
       `The application '${app}' cached at '${fullPath}' has ` +
-        `expired after ${CACHED_APPS_MAX_AGE}ms`
+        `expired after ${CACHED_APPS_MAX_AGE_MS}ms`
     );
     if (fullPath) {
       fs.rimraf(fullPath);
@@ -44,7 +53,7 @@ process.on('exit', () => {
   );
   for (const appPath of appPaths) {
     try {
-      // Asynchronous calls are not supported in onExit handler
+      // @ts-ignore it's defined
       fs.rimrafSync(appPath);
     } catch (e) {
       logger.warn(e.message);
@@ -52,167 +61,23 @@ process.on('exit', () => {
   }
 });
 
-async function retrieveHeaders(link) {
-  try {
-    return (
-      await axios({
-        url: link,
-        method: 'HEAD',
-        timeout: 5000,
-      })
-    ).headers;
-  } catch (e) {
-    logger.info(`Cannot send HEAD request to '${link}'. Original error: ${e.message}`);
-  }
-  return {};
-}
-
-function getCachedApplicationPath(link, currentAppProps = {}, cachedAppInfo = {}) {
-  const refresh = () => {
-    logger.debug(`A fresh copy of the application is going to be downloaded from ${link}`);
-    return null;
-  };
-
-  if (!_.isPlainObject(cachedAppInfo) || !_.isPlainObject(currentAppProps)) {
-    // if an invalid arg is passed then assume cache miss
-    return refresh();
-  }
-
-  const {
-    lastModified: currentModified,
-    immutable: currentImmutable,
-    // maxAge is in seconds
-    maxAge: currentMaxAge,
-  } = currentAppProps;
-  const {
-    // Date instance
-    lastModified,
-    // boolean
-    immutable,
-    // Unix time in milliseconds
-    timestamp,
-    fullPath,
-  } = cachedAppInfo;
-  if (lastModified && currentModified) {
-    if (currentModified.getTime() <= lastModified.getTime()) {
-      logger.debug(`The application at ${link} has not been modified since ${lastModified}`);
-      return fullPath;
-    }
-    logger.debug(`The application at ${link} has been modified since ${lastModified}`);
-    return refresh();
-  }
-  if (immutable && currentImmutable) {
-    logger.debug(`The application at ${link} is immutable`);
-    return fullPath;
-  }
-  if (currentMaxAge && timestamp) {
-    const msLeft = timestamp + currentMaxAge * 1000 - Date.now();
-    if (msLeft > 0) {
-      logger.debug(
-        `The cached application '${path.basename(fullPath)}' will expire in ${msLeft / 1000}s`
-      );
-      return fullPath;
-    }
-    logger.debug(`The cached application '${path.basename(fullPath)}' has expired`);
-  }
-  return refresh();
-}
-
-function verifyAppExtension(app, supportedAppExtensions) {
-  if (supportedAppExtensions.map(_.toLower).includes(_.toLower(path.extname(app)))) {
-    return app;
-  }
-  throw new Error(
-    `New app path '${app}' did not have ` +
-      `${util.pluralize('extension', supportedAppExtensions.length, false)}: ` +
-      supportedAppExtensions
-  );
-}
-
-async function calculateFolderIntegrity(folderPath) {
-  return (await fs.glob('**/*', {cwd: folderPath, strict: false, nosort: true})).length;
-}
-
-async function calculateFileIntegrity(filePath) {
-  return await fs.hash(filePath);
-}
-
-async function isAppIntegrityOk(currentPath, expectedIntegrity = {}) {
-  if (!(await fs.exists(currentPath))) {
-    return false;
-  }
-
-  // Folder integrity check is simple:
-  // Verify the previous amount of files is not greater than the current one.
-  // We don't want to use equality comparison because of an assumption that the OS might
-  // create some unwanted service files/cached inside of that folder or its subfolders.
-  // Ofc, validating the hash sum of each file (or at least of file path) would be much
-  // more precise, but we don't need to be very precise here and also don't want to
-  // overuse RAM and have a performance drop.
-  return (await fs.stat(currentPath)).isDirectory()
-    ? (await calculateFolderIntegrity(currentPath)) >= expectedIntegrity?.folder
-    : (await calculateFileIntegrity(currentPath)) === expectedIntegrity?.file;
-}
-
 /**
- * @typedef PostProcessOptions
- * @property {?Object} cachedAppInfo The information about the previously cached app instance (if exists):
- *    - packageHash: SHA1 hash of the package if it is a file and not a folder
- *    - lastModified: Optional Date instance, the value of file's `Last-Modified` header
- *    - immutable: Optional boolean value. Contains true if the file has an `immutable` mark
- *                 in `Cache-control` header
- *    - maxAge: Optional integer representation of `maxAge` parameter in `Cache-control` header
- *    - timestamp: The timestamp this item has been added to the cache (measured in Unix epoch
- *                 milliseconds)
- *    - integrity: An object containing either `file` property with SHA1 hash of the file
- *                 or `folder` property with total amount of cached files and subfolders
- *    - fullPath: the full path to the cached app
- * @property {boolean} isUrl Whether the app has been downloaded from a remote URL
- * @property {?Object} headers Optional headers object. Only present if `isUrl` is true and if the server
- * responds to HEAD requests. All header names are normalized to lowercase.
- * @property {string} appPath A string containing full path to the preprocessed application package (either
- * downloaded or a local one)
- */
-
-/**
- * @typedef PostProcessResult
- * @property {string} appPath The full past to the post-processed application package on the
- * local file system (might be a file or a folder path)
- */
-
-/**
- * @typedef ConfigureAppOptions
- * @property {(obj: PostProcessOptions) => (Promise<PostProcessResult|undefined>|PostProcessResult|undefined)} [onPostProcess]
- * Optional function, which should be applied
- * to the application after it is downloaded/preprocessed. This function may be async
- * and is expected to accept single object parameter.
- * The function is expected to either return a falsy value, which means the app must not be
- * cached and a fresh copy of it is downloaded each time. If this function returns an object
- * containing `appPath` property then the integrity of it will be verified and stored into
- * the cache.
- * @property {string[]} supportedExtensions List of supported application extensions (
- * including starting dots). This property is mandatory and must not be empty.
- */
-
-/**
- * Prepares an app to be used in an automated test. The app gets cached automatically
- * if it is an archive or if it is downloaded from an URL.
- * If the downloaded app has `.zip` extension, this method will unzip it.
- * The unzip does not work when `onPostProcess` is provided.
  *
- * @param {string} app Either a full path to the app or a remote URL
- * @param {string|string[]|ConfigureAppOptions} options
- * @returns The full path to the resulting application bundle
+ * @param {string} app
+ * @param {string|string[]|import('@appium/types').ConfigureAppOptions} options
  */
-async function configureApp(app, options = /** @type {ConfigureAppOptions} */ ({})) {
+export async function configureApp(
+  app,
+  options = /** @type {import('@appium/types').ConfigureAppOptions} */ ({})
+) {
   if (!_.isString(app)) {
     // immediately shortcircuit if not given an app
     return;
   }
 
   let supportedAppExtensions;
-  const onPostProcess =
-    !_.isString(options) && !_.isArray(options) ? options.onPostProcess : undefined;
+  const onPostProcess = !_.isString(options) && !_.isArray(options) ? options.onPostProcess : undefined;
+  const onDownload = !_.isString(options) && !_.isArray(options) ? options.onDownload : undefined;
 
   if (_.isString(options)) {
     supportedAppExtensions = [options];
@@ -226,112 +91,157 @@ async function configureApp(app, options = /** @type {ConfigureAppOptions} */ ({
   }
 
   let newApp = app;
+  const originalAppLink = app;
   let shouldUnzipApp = false;
   let packageHash = null;
-  let headers = null;
+  /** @type {import('axios').AxiosResponse['headers']|undefined} */
+  let headers = undefined;
   /** @type {RemoteAppProps} */
   const remoteAppProps = {
     lastModified: null,
     immutable: false,
     maxAge: null,
+    etag: null,
   };
-  const {protocol, pathname} = url.parse(newApp);
-  const isUrl = protocol === null ? false : ['http:', 'https:'].includes(protocol);
+  const {protocol, pathname} = parseAppLink(app);
+  const isUrl = isSupportedUrl(app);
+  if (!isUrl && !path.isAbsolute(newApp)) {
+    newApp = path.resolve(process.cwd(), newApp);
+    logger.warn(
+      `The current application path '${app}' is not absolute ` +
+      `and has been rewritten to '${newApp}'. Consider using absolute paths rather than relative`
+    );
+    app = newApp;
+  }
+  const appCacheKey = toCacheKey(app);
 
-  const cachedAppInfo = APPLICATIONS_CACHE.get(app);
+  const cachedAppInfo = APPLICATIONS_CACHE.get(appCacheKey);
+  if (cachedAppInfo) {
+    logger.debug(`Cached app data: ${JSON.stringify(cachedAppInfo, null, 2)}`);
+  }
 
-  return await APPLICATIONS_CACHE_GUARD.acquire(app, async () => {
+  return await APPLICATIONS_CACHE_GUARD.acquire(appCacheKey, async () => {
     if (isUrl) {
       // Use the app from remote URL
       logger.info(`Using downloadable app '${newApp}'`);
-      headers = await retrieveHeaders(newApp);
-      if (!_.isEmpty(headers)) {
-        if (headers['last-modified']) {
-          remoteAppProps.lastModified = new Date(headers['last-modified']);
-        }
-        logger.debug(`Last-Modified: ${headers['last-modified']}`);
-        if (headers['cache-control']) {
-          remoteAppProps.immutable = /\bimmutable\b/i.test(headers['cache-control']);
-          const maxAgeMatch = /\bmax-age=(\d+)\b/i.exec(headers['cache-control']);
-          if (maxAgeMatch) {
-            remoteAppProps.maxAge = parseInt(maxAgeMatch[1], 10);
-          }
-        }
-        logger.debug(`Cache-Control: ${headers['cache-control']}`);
+      const reqHeaders = {
+        ...DEFAULT_REQ_HEADERS,
+      };
+      if (cachedAppInfo?.etag) {
+        reqHeaders['if-none-match'] = cachedAppInfo.etag;
+      } else if (cachedAppInfo?.lastModified) {
+        reqHeaders['if-modified-since'] = cachedAppInfo.lastModified.toUTCString();
       }
-      const cachedPath = getCachedApplicationPath(app, remoteAppProps, cachedAppInfo);
-      if (cachedPath) {
-        if (await isAppIntegrityOk(cachedPath, cachedAppInfo?.integrity)) {
-          logger.info(`Reusing previously downloaded application at '${cachedPath}'`);
-          return verifyAppExtension(cachedPath, supportedAppExtensions);
-        }
-        logger.info(
-          `The application at '${cachedPath}' does not exist anymore ` +
-            `or its integrity has been damaged. Deleting it from the internal cache`
-        );
-        APPLICATIONS_CACHE.delete(app);
-      }
+      logger.debug(`Request headers: ${JSON.stringify(reqHeaders)}`);
 
-      let fileName = null;
-      const basename = fs.sanitizeName(path.basename(decodeURIComponent(pathname ?? '')), {
-        replacement: SANITIZE_REPLACEMENT,
-      });
-      const extname = path.extname(basename);
-      // to determine if we need to unzip the app, we have a number of places
-      // to look: content type, content disposition, or the file extension
-      if (ZIP_EXTS.includes(extname)) {
-        fileName = basename;
-        shouldUnzipApp = true;
-      }
-      if (headers['content-type']) {
-        const ct = headers['content-type'];
-        logger.debug(`Content-Type: ${ct}`);
-        // the filetype may not be obvious for certain urls, so check the mime type too
-        if (
-          ZIP_MIME_TYPES.some((mimeType) =>
-            new RegExp(`\\b${_.escapeRegExp(mimeType)}\\b`).test(ct)
-          )
-        ) {
-          if (!fileName) {
-            fileName = `${DEFAULT_BASENAME}.zip`;
+      let {headers, stream, status} = await queryAppLink(newApp, reqHeaders);
+      logger.debug(`Response status: ${status}`);
+      try {
+        if (!_.isEmpty(headers)) {
+          if (headers.etag) {
+            logger.debug(`Etag: ${headers.etag}`);
+            remoteAppProps.etag = headers.etag;
           }
+          if (headers['last-modified']) {
+            logger.debug(`Last-Modified: ${headers['last-modified']}`);
+            remoteAppProps.lastModified = new Date(headers['last-modified']);
+          }
+          if (headers['cache-control']) {
+            logger.debug(`Cache-Control: ${headers['cache-control']}`);
+            remoteAppProps.immutable = /\bimmutable\b/i.test(headers['cache-control']);
+            const maxAgeMatch = /\bmax-age=(\d+)\b/i.exec(headers['cache-control']);
+            if (maxAgeMatch) {
+              remoteAppProps.maxAge = parseInt(maxAgeMatch[1], 10);
+            }
+          }
+        }
+        if (cachedAppInfo && status === HTTP_STATUS_NOT_MODIFIED) {
+          if (await isAppIntegrityOk(/** @type {string} */ (cachedAppInfo.fullPath), cachedAppInfo.integrity)) {
+            logger.info(`Reusing previously downloaded application at '${cachedAppInfo.fullPath}'`);
+            return verifyAppExtension(/** @type {string} */ (cachedAppInfo.fullPath), supportedAppExtensions);
+          }
+          logger.info(
+            `The application at '${cachedAppInfo.fullPath}' does not exist anymore ` +
+              `or its integrity has been damaged. Deleting it from the internal cache`
+          );
+          APPLICATIONS_CACHE.delete(appCacheKey);
+
+          if (!stream.closed) {
+            stream.destroy();
+          }
+          ({stream, headers, status} = await queryAppLink(newApp, {...DEFAULT_REQ_HEADERS}));
+        }
+
+        let fileName = null;
+        const basename = fs.sanitizeName(path.basename(decodeURIComponent(pathname ?? '')), {
+          replacement: SANITIZE_REPLACEMENT,
+        });
+        const extname = path.extname(basename);
+        // to determine if we need to unzip the app, we have a number of places
+        // to look: content type, content disposition, or the file extension
+        if (ZIP_EXTS.has(extname)) {
+          fileName = basename;
           shouldUnzipApp = true;
         }
-      }
-      if (headers['content-disposition'] && /^attachment/i.test(headers['content-disposition'])) {
-        logger.debug(`Content-Disposition: ${headers['content-disposition']}`);
-        const match = /filename="([^"]+)/i.exec(headers['content-disposition']);
-        if (match) {
-          fileName = fs.sanitizeName(match[1], {
-            replacement: SANITIZE_REPLACEMENT,
-          });
-          shouldUnzipApp = shouldUnzipApp || ZIP_EXTS.includes(path.extname(fileName));
+        if (headers['content-type']) {
+          const ct = headers['content-type'];
+          logger.debug(`Content-Type: ${ct}`);
+          // the filetype may not be obvious for certain urls, so check the mime type too
+          if (
+            ZIP_MIME_TYPES.some((mimeType) =>
+              new RegExp(`\\b${_.escapeRegExp(mimeType)}\\b`).test(ct)
+            )
+          ) {
+            if (!fileName) {
+              fileName = `${DEFAULT_BASENAME}.zip`;
+            }
+            shouldUnzipApp = true;
+          }
+        }
+        if (headers['content-disposition'] && /^attachment/i.test(headers['content-disposition'])) {
+          logger.debug(`Content-Disposition: ${headers['content-disposition']}`);
+          const match = /filename="([^"]+)/i.exec(headers['content-disposition']);
+          if (match) {
+            fileName = fs.sanitizeName(match[1], {
+              replacement: SANITIZE_REPLACEMENT,
+            });
+            shouldUnzipApp = shouldUnzipApp || ZIP_EXTS.has(path.extname(fileName));
+          }
+        }
+        if (!fileName) {
+          // assign the default file name and the extension if none has been detected
+          const resultingName = basename
+            ? basename.substring(0, basename.length - extname.length)
+            : DEFAULT_BASENAME;
+          let resultingExt = extname;
+          if (!supportedAppExtensions.includes(resultingExt)) {
+            logger.info(
+              `The current file extension '${resultingExt}' is not supported. ` +
+                `Defaulting to '${_.first(supportedAppExtensions)}'`
+            );
+            resultingExt = /** @type {string} */ (_.first(supportedAppExtensions));
+          }
+          fileName = `${resultingName}${resultingExt}`;
+        }
+        newApp = onDownload
+          ? await onDownload({
+            url: originalAppLink,
+            headers: /** @type {import('@appium/types').HTTPHeaders} */ (_.clone(headers)),
+            stream,
+          })
+          : await fetchApp(stream, await tempDir.path({
+            prefix: fileName,
+            suffix: '',
+          }));
+      } finally {
+        if (!stream.closed) {
+          stream.destroy();
         }
       }
-      if (!fileName) {
-        // assign the default file name and the extension if none has been detected
-        const resultingName = basename
-          ? basename.substring(0, basename.length - extname.length)
-          : DEFAULT_BASENAME;
-        let resultingExt = extname;
-        if (!supportedAppExtensions.includes(resultingExt)) {
-          logger.info(
-            `The current file extension '${resultingExt}' is not supported. ` +
-              `Defaulting to '${_.first(supportedAppExtensions)}'`
-          );
-          resultingExt = /** @type {string} */ (_.first(supportedAppExtensions));
-        }
-        fileName = `${resultingName}${resultingExt}`;
-      }
-      const targetPath = await tempDir.path({
-        prefix: fileName,
-        suffix: '',
-      });
-      newApp = await downloadApp(newApp, targetPath);
     } else if (await fs.exists(newApp)) {
       // Use the local app
       logger.info(`Using local app '${newApp}'`);
-      shouldUnzipApp = ZIP_EXTS.includes(path.extname(newApp));
+      shouldUnzipApp = ZIP_EXTS.has(path.extname(newApp));
     } else {
       let errorMessage = `The application at '${newApp}' does not exist or is not accessible`;
       // protocol value for 'C:\\temp' is 'c:', so we check the length as well
@@ -351,19 +261,19 @@ async function configureApp(app, options = /** @type {ConfigureAppOptions} */ ({
     if (isPackageAFile && shouldUnzipApp && !_.isFunction(onPostProcess)) {
       const archivePath = newApp;
       if (packageHash === cachedAppInfo?.packageHash) {
-        const {fullPath} = cachedAppInfo;
-        if (await isAppIntegrityOk(fullPath, cachedAppInfo?.integrity)) {
+        const fullPath = cachedAppInfo?.fullPath;
+        if (await isAppIntegrityOk(/** @type {string} */ (fullPath), cachedAppInfo?.integrity)) {
           if (archivePath !== app) {
             await fs.rimraf(archivePath);
           }
           logger.info(`Will reuse previously cached application at '${fullPath}'`);
-          return verifyAppExtension(fullPath, supportedAppExtensions);
+          return verifyAppExtension(/** @type {string} */ (fullPath), supportedAppExtensions);
         }
         logger.info(
           `The application at '${fullPath}' does not exist anymore ` +
             `or its integrity has been damaged. Deleting it from the cache`
         );
-        APPLICATIONS_CACHE.delete(app);
+        APPLICATIONS_CACHE.delete(appCacheKey);
       }
       const tmpRoot = await tempDir.openDir();
       try {
@@ -374,13 +284,6 @@ async function configureApp(app, options = /** @type {ConfigureAppOptions} */ ({
         }
       }
       logger.info(`Unzipped local app to '${newApp}'`);
-    } else if (!path.isAbsolute(newApp)) {
-      newApp = path.resolve(process.cwd(), newApp);
-      logger.warn(
-        `The current application path '${app}' is not absolute ` +
-          `and has been rewritten to '${newApp}'. Consider using absolute paths rather than relative`
-      );
-      app = newApp;
     }
 
     const storeAppInCache = async (appPathToCache) => {
@@ -394,7 +297,7 @@ async function configureApp(app, options = /** @type {ConfigureAppOptions} */ ({
       } else {
         integrity.file = await calculateFileIntegrity(appPathToCache);
       }
-      APPLICATIONS_CACHE.set(app, {
+      APPLICATIONS_CACHE.set(appCacheKey, {
         ...remoteAppProps,
         timestamp: Date.now(),
         packageHash,
@@ -405,117 +308,32 @@ async function configureApp(app, options = /** @type {ConfigureAppOptions} */ ({
     };
 
     if (_.isFunction(onPostProcess)) {
-      const result = await onPostProcess({
-        cachedAppInfo: _.clone(cachedAppInfo),
-        isUrl,
-        headers: _.clone(headers),
-        appPath: newApp,
-      });
+      const result = await onPostProcess(
+        /** @type {import('@appium/types').PostProcessOptions<import('axios').AxiosResponseHeaders>} */ ({
+          cachedAppInfo: _.clone(cachedAppInfo),
+          isUrl,
+          originalAppLink,
+          headers: _.clone(headers),
+          appPath: newApp,
+        })
+      );
       return !result?.appPath || app === result?.appPath || !(await fs.exists(result?.appPath))
         ? newApp
         : await storeAppInCache(result.appPath);
     }
 
     verifyAppExtension(newApp, supportedAppExtensions);
-    return app !== newApp && (packageHash || _.values(remoteAppProps).some(Boolean))
+    return appCacheKey !== toCacheKey(newApp) && (packageHash || _.values(remoteAppProps).some(Boolean))
       ? await storeAppInCache(newApp)
       : newApp;
   });
 }
 
-async function downloadApp(app, targetPath) {
-  const {href} = url.parse(app);
-  try {
-    await net.downloadFile(href, targetPath, {
-      timeout: APP_DOWNLOAD_TIMEOUT_MS,
-    });
-  } catch (err) {
-    throw new Error(`Unable to download the app: ${err.message}`);
-  }
-  return targetPath;
-}
-
 /**
- * Extracts the bundle from an archive into the given folder
- *
- * @param {string} zipPath Full path to the archive containing the bundle
- * @param {string} dstRoot Full path to the folder where the extracted bundle
- * should be placed
- * @param {Array<string>|string} supportedAppExtensions The list of extensions
- * the target application bundle supports, for example ['.apk', '.apks'] for
- * Android packages
- * @returns {Promise<string>} Full path to the bundle in the destination folder
- * @throws {Error} If the given archive is invalid or no application bundles
- * have been found inside
+ * @param {string} app
+ * @returns {boolean}
  */
-async function unzipApp(zipPath, dstRoot, supportedAppExtensions) {
-  await zip.assertValidZip(zipPath);
-
-  if (!_.isArray(supportedAppExtensions)) {
-    supportedAppExtensions = [supportedAppExtensions];
-  }
-
-  const tmpRoot = await tempDir.openDir();
-  try {
-    logger.debug(`Unzipping '${zipPath}'`);
-    const timer = new timing.Timer().start();
-    const useSystemUnzipEnv = process.env.APPIUM_PREFER_SYSTEM_UNZIP;
-    const useSystemUnzip =
-      _.isEmpty(useSystemUnzipEnv) || !['0', 'false'].includes(_.toLower(useSystemUnzipEnv));
-    /**
-     * Attempt to use use the system `unzip` (e.g., `/usr/bin/unzip`) due
-     * to the significant performance improvement it provides over the native
-     * JS "unzip" implementation.
-     * @type {import('@appium/support/lib/zip').ExtractAllOptions}
-     */
-    const extractionOpts = {useSystemUnzip};
-    // https://github.com/appium/appium/issues/14100
-    if (path.extname(zipPath) === IPA_EXT) {
-      logger.debug(
-        `Enforcing UTF-8 encoding on the extracted file names for '${path.basename(zipPath)}'`
-      );
-      extractionOpts.fileNamesEncoding = 'utf8';
-    }
-    await zip.extractAllTo(zipPath, tmpRoot, extractionOpts);
-    const globPattern = `**/*.+(${supportedAppExtensions
-      .map((ext) => ext.replace(/^\./, ''))
-      .join('|')})`;
-    const sortedBundleItems = (
-      await fs.glob(globPattern, {
-        cwd: tmpRoot,
-        strict: false,
-        // Get the top level match
-      })
-    ).sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
-    if (_.isEmpty(sortedBundleItems)) {
-      logger.errorAndThrow(
-        `App unzipped OK, but we could not find any '${supportedAppExtensions}' ` +
-          util.pluralize('bundle', supportedAppExtensions.length, false) +
-          ` in it. Make sure your archive contains at least one package having ` +
-          `'${supportedAppExtensions}' ${util.pluralize(
-            'extension',
-            supportedAppExtensions.length,
-            false
-          )}`
-      );
-    }
-    logger.debug(
-      `Extracted ${util.pluralize('bundle item', sortedBundleItems.length, true)} ` +
-        `from '${zipPath}' in ${Math.round(
-          timer.getDuration().asMilliSeconds
-        )}ms: ${sortedBundleItems}`
-    );
-    const matchedBundle = /** @type {string} */ (_.first(sortedBundleItems));
-    logger.info(`Assuming '${matchedBundle}' is the correct bundle`);
-    const dstPath = path.resolve(dstRoot, path.basename(matchedBundle));
-    await fs.mv(path.resolve(tmpRoot, matchedBundle), dstPath, {mkdirp: true});
-    return dstPath;
-  } finally {
-    await fs.rimraf(tmpRoot);
-  }
-}
-
-function isPackageOrBundle(app) {
+export function isPackageOrBundle(app) {
   return /^([a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)+$/.test(app);
 }
 
@@ -529,7 +347,7 @@ function isPackageOrBundle(app) {
  * @param {String} firstKey The first key to duplicate
  * @param {String} secondKey The second key to duplicate
  */
-function duplicateKeys(input, firstKey, secondKey) {
+export function duplicateKeys(input, firstKey, secondKey) {
   // If array provided, recursively call on all elements
   if (_.isArray(input)) {
     return input.map((item) => duplicateKeys(item, firstKey, secondKey));
@@ -560,7 +378,7 @@ function duplicateKeys(input, firstKey, secondKey) {
  *
  * @param {string|Array<String>} cap A desired capability
  */
-function parseCapsArray(cap) {
+export function parseCapsArray(cap) {
   if (_.isArray(cap)) {
     return cap;
   }
@@ -571,8 +389,8 @@ function parseCapsArray(cap) {
     if (_.isArray(parsedCaps)) {
       return parsedCaps;
     }
-  } catch (ign) {
-    logger.warn(`Failed to parse capability as JSON array`);
+  } catch (e) {
+    logger.warn(`Failed to parse capability as JSON array: ${e.message}`);
   }
   if (_.isString(cap)) {
     return [cap];
@@ -583,13 +401,313 @@ function parseCapsArray(cap) {
 /**
  * Generate a string that uniquely describes driver instance
  *
- * @param {import('@appium/types').Core} obj driver instance
- * @param {string?} sessionId session identifier (if exists)
+ * @param {object} obj driver instance
+ * @param {string?} [sessionId=null] session identifier (if exists).
+ * This parameter is deprecated and is not used.
  * @returns {string}
  */
-function generateDriverLogPrefix(obj, sessionId = null) {
-  const instanceName = `${obj.constructor.name}@${node.getObjectId(obj).substring(0, 4)}`;
-  return sessionId ? `${instanceName} (${sessionId.substring(0, 8)})` : instanceName;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function generateDriverLogPrefix(obj, sessionId = null) {
+  return `${obj.constructor.name}@${node.getObjectId(obj).substring(0, 4)}`;
+}
+
+/**
+ * Sends a HTTP GET query to fetch the app with caching enabled.
+ * Follows https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching
+ *
+ * @param {string} appLink The URL to download an app from
+ * @param {import('axios').RawAxiosRequestHeaders} reqHeaders Additional HTTP request headers
+ * @returns {Promise<RemoteAppData>}
+ */
+async function queryAppLink(appLink, reqHeaders) {
+  const {href, auth} = url.parse(appLink);
+  const axiosUrl = auth ? href.replace(`${auth}@`, '') : href;
+  /** @type {import('axios').AxiosBasicCredentials|undefined} */
+  const axiosAuth = auth ? {
+    username: auth.substring(0, auth.indexOf(':')),
+    password: auth.substring(auth.indexOf(':') + 1),
+  } : undefined;
+  /**
+   * @type {import('axios').RawAxiosRequestConfig}
+   */
+  const requestOpts = {
+    url: axiosUrl,
+    auth: axiosAuth,
+    responseType: 'stream',
+    timeout: APP_DOWNLOAD_TIMEOUT_MS,
+    validateStatus: (status) =>
+      (status >= 200 && status < 300) || status === HTTP_STATUS_NOT_MODIFIED,
+    headers: reqHeaders,
+  };
+  try {
+    const {data: stream, headers, status} = await axios(requestOpts);
+    return {
+      stream,
+      headers,
+      status,
+    };
+  } catch (err) {
+    throw new Error(`Cannot download the app from ${axiosUrl}: ${err.message}`);
+  }
+}
+
+/**
+ * Retrieves app payload from the given stream. Also meters the download performance.
+ *
+ * @param {import('stream').Readable} srcStream The incoming stream
+ * @param {string} dstPath The target file path to be written
+ * @returns {Promise<string>} The same dstPath
+ * @throws {Error} If there was a failure while downloading the file
+ */
+async function fetchApp(srcStream, dstPath) {
+  const timer = new timing.Timer().start();
+  try {
+    const writer = fs.createWriteStream(dstPath);
+    srcStream.pipe(writer);
+
+    await new B((resolve, reject) => {
+      srcStream.once('error', reject);
+      writer.once('finish', resolve);
+      writer.once('error', (e) => {
+        srcStream.unpipe(writer);
+        reject(e);
+      });
+    });
+  } catch (err) {
+    throw new Error(`Cannot fetch the application: ${err.message}`);
+  }
+
+  const secondsElapsed = timer.getDuration().asSeconds;
+  const {size} = await fs.stat(dstPath);
+  logger.debug(
+    `The application (${util.toReadableSizeString(size)}) ` +
+      `has been downloaded to '${dstPath}' in ${secondsElapsed.toFixed(3)}s`
+  );
+  // it does not make much sense to approximate the speed for short downloads
+  if (secondsElapsed >= AVG_DOWNLOAD_SPEED_MEASUREMENT_THRESHOLD_SEC) {
+    const bytesPerSec = Math.floor(size / secondsElapsed);
+    logger.debug(`Approximate download speed: ${util.toReadableSizeString(bytesPerSec)}/s`);
+  }
+
+  return dstPath;
+}
+
+/**
+ * Extracts the bundle from an archive into the given folder
+ *
+ * @param {string} zipPath Full path to the archive containing the bundle
+ * @param {string} dstRoot Full path to the folder where the extracted bundle
+ * should be placed
+ * @param {Array<string>|string} supportedAppExtensions The list of extensions
+ * the target application bundle supports, for example ['.apk', '.apks'] for
+ * Android packages
+ * @returns {Promise<string>} Full path to the bundle in the destination folder
+ * @throws {Error} If the given archive is invalid or no application bundles
+ * have been found inside
+ */
+async function unzipApp(zipPath, dstRoot, supportedAppExtensions) {
+  await zip.assertValidZip(zipPath);
+
+  if (!_.isArray(supportedAppExtensions)) {
+    supportedAppExtensions = [supportedAppExtensions];
+  }
+
+  const tmpRoot = await tempDir.openDir();
+  try {
+    logger.debug(`Unzipping '${zipPath}'`);
+    const timer = new timing.Timer().start();
+    const useSystemUnzip = isEnvOptionEnabled('APPIUM_PREFER_SYSTEM_UNZIP', true);
+    /**
+     * Attempt to use use the system `unzip` (e.g., `/usr/bin/unzip`) due
+     * to the significant performance improvement it provides over the native
+     * JS "unzip" implementation.
+     * @type {import('@appium/support/lib/zip').ExtractAllOptions}
+     */
+    const extractionOpts = {useSystemUnzip};
+    // https://github.com/appium/appium/issues/14100
+    if (path.extname(zipPath) === IPA_EXT) {
+      logger.debug(
+        `Enforcing UTF-8 encoding on the extracted file names for '${path.basename(zipPath)}'`
+      );
+      extractionOpts.fileNamesEncoding = 'utf8';
+    }
+    await zip.extractAllTo(zipPath, tmpRoot, extractionOpts);
+    const globPattern = `**/*.+(${supportedAppExtensions
+      .map((ext) => ext.replace(/^\./, ''))
+      .join('|')})`;
+    const sortedBundleItems = (
+      await fs.glob(globPattern, {
+        cwd: tmpRoot,
+        // Get the top level match
+      })
+    ).sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
+    if (_.isEmpty(sortedBundleItems)) {
+      throw logger.errorWithException(
+        `App unzipped OK, but we could not find any '${supportedAppExtensions}' ` +
+          util.pluralize('bundle', supportedAppExtensions.length, false) +
+          ` in it. Make sure your archive contains at least one package having ` +
+          `'${supportedAppExtensions}' ${util.pluralize(
+            'extension',
+            supportedAppExtensions.length,
+            false
+          )}`
+      );
+    }
+    logger.debug(
+      `Extracted ${util.pluralize('bundle item', sortedBundleItems.length, true)} ` +
+        `from '${zipPath}' in ${Math.round(
+          timer.getDuration().asMilliSeconds
+        )}ms: ${sortedBundleItems}`
+    );
+    const matchedBundle = /** @type {string} */ (_.first(sortedBundleItems));
+    logger.info(`Assuming '${matchedBundle}' is the correct bundle`);
+    const dstPath = path.resolve(dstRoot, path.basename(matchedBundle));
+    await fs.mv(path.resolve(tmpRoot, matchedBundle), dstPath, {mkdirp: true});
+    return dstPath;
+  } finally {
+    await fs.rimraf(tmpRoot);
+  }
+}
+
+/**
+ * Transforms the given app link to the cache key.
+ * This is necessary to properly cache apps
+ * having the same address, but different query strings,
+ * for example ones stored in S3 using presigned URLs.
+ *
+ * @param {string} app App link.
+ * @returns {string} Transformed app link or the original arg if
+ * no transfromation is needed.
+ */
+function toCacheKey(app) {
+  if (!isEnvOptionEnabled('APPIUM_APPS_CACHE_IGNORE_URL_QUERY') || !isSupportedUrl(app)) {
+    return app;
+  }
+  try {
+    const {href, search} = parseAppLink(app);
+    if (href && search) {
+      return href.replace(search, '');
+    }
+    if (href) {
+      return href;
+    }
+  } catch {}
+  return app;
+}
+
+/**
+ * Safely parses the given app link to a URL object
+ *
+ * @param {string} appLink
+ * @returns {URL|import('@appium/types').StringRecord} Parsed URL object
+ * or an empty object if the parsing has failed
+ */
+function parseAppLink(appLink) {
+  try {
+    return new URL(appLink);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Checks whether we can threat the given app link
+ * as a URL,
+ *
+ * @param {string} app
+ * @returns {boolean} True if app is a supported URL
+ */
+function isSupportedUrl(app) {
+  try {
+    const {protocol} = parseAppLink(app);
+    return ['http:', 'https:'].includes(protocol);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if the given environment option is enabled
+ *
+ * @param {string} optionName Option name
+ * @param {boolean|null} [defaultValue=null] The value to return if the given env value
+ * is not set explcitly
+ * @returns {boolean} True if the option is enabled
+ */
+function isEnvOptionEnabled(optionName, defaultValue = null) {
+  const value = process.env[optionName];
+  if (!_.isNull(defaultValue) && _.isEmpty(value)) {
+    return defaultValue;
+  }
+  return !_.isEmpty(value) && !['0', 'false', 'no'].includes(_.toLower(value));
+}
+
+/**
+ *
+ * @param {string} [envVarName]
+ * @param {number} defaultValue
+ * @returns {number}
+ */
+function toNaturalNumber(defaultValue, envVarName) {
+  if (!envVarName || _.isUndefined(process.env[envVarName])) {
+    return defaultValue;
+  }
+  const num = parseInt(`${process.env[envVarName]}`, 10);
+  return num > 0 ? num : defaultValue;
+}
+
+/**
+ * @param {string} app
+ * @param {string[]} supportedAppExtensions
+ * @returns {string}
+ */
+function verifyAppExtension(app, supportedAppExtensions) {
+  if (supportedAppExtensions.map(_.toLower).includes(_.toLower(path.extname(app)))) {
+    return app;
+  }
+  throw new Error(
+    `New app path '${app}' did not have ` +
+      `${util.pluralize('extension', supportedAppExtensions.length, false)}: ` +
+      supportedAppExtensions
+  );
+}
+
+/**
+ * @param {string} folderPath
+ * @returns {Promise<number>}
+ */
+async function calculateFolderIntegrity(folderPath) {
+  return (await fs.glob('**/*', {cwd: folderPath})).length;
+}
+
+/**
+ * @param {string} filePath
+ * @returns {Promise<string>}
+ */
+async function calculateFileIntegrity(filePath) {
+  return await fs.hash(filePath);
+}
+
+/**
+ * @param {string} currentPath
+ * @param {import('@appium/types').StringRecord} expectedIntegrity
+ * @returns {Promise<boolean>}
+ */
+async function isAppIntegrityOk(currentPath, expectedIntegrity = {}) {
+  if (!(await fs.exists(currentPath))) {
+    return false;
+  }
+
+  // Folder integrity check is simple:
+  // Verify the previous amount of files is not greater than the current one.
+  // We don't want to use equality comparison because of an assumption that the OS might
+  // create some unwanted service files/cached inside of that folder or its subfolders.
+  // Ofc, validating the hash sum of each file (or at least of file path) would be much
+  // more precise, but we don't need to be very precise here and also don't want to
+  // overuse RAM and have a performance drop.
+  return (await fs.stat(currentPath)).isDirectory()
+    ? (await calculateFolderIntegrity(currentPath)) >= expectedIntegrity?.folder
+    : (await calculateFileIntegrity(currentPath)) === expectedIntegrity?.file;
 }
 
 /** @type {import('@appium/types').DriverHelpers} */
@@ -600,11 +718,18 @@ export default {
   parseCapsArray,
   generateDriverLogPrefix,
 };
-export {configureApp, isPackageOrBundle, duplicateKeys, parseCapsArray, generateDriverLogPrefix};
 
 /**
  * @typedef RemoteAppProps
  * @property {Date?} lastModified
  * @property {boolean} immutable
  * @property {number?} maxAge
+ * @property {string?} etag
+ */
+
+/**
+ * @typedef RemoteAppData Properties of the remote application (e.g. GET HTTP response) to be downloaded.
+ * @property {number} status The HTTP status of the response
+ * @property {import('stream').Readable} stream The HTTP response body represented as readable stream
+ * @property {import('axios').RawAxiosResponseHeaders | import('axios').AxiosResponseHeaders} headers HTTP response headers
  */

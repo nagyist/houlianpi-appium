@@ -17,7 +17,7 @@ function buildReqRes(url, method, body) {
   res.send = (body) => {
     try {
       body = JSON.parse(body);
-    } catch (e) {}
+    } catch {}
     res.sentBody = body;
   };
   return [req, res];
@@ -25,6 +25,15 @@ function buildReqRes(url, method, body) {
 
 describe('proxy', function () {
   let port;
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+    port = await getTestPort();
+  });
 
   function mockProxy(opts = {}) {
     // sets default server/port
@@ -35,10 +44,6 @@ describe('proxy', function () {
     };
     return proxy;
   }
-
-  before(async function () {
-    port = await getTestPort();
-  });
 
   it('should override default params', function () {
     let j = mockProxy({server: '127.0.0.2', port});
@@ -101,6 +106,12 @@ describe('proxy', function () {
     it('should not throw an error if url does not require a session id and its null', function () {
       let j = mockProxy();
       let newUrl = j.getUrlForProxy('/status');
+
+      should.exist(newUrl);
+    });
+    it('should not throw an error if url does not require a session id with appium vendor prefix and its null', function () {
+      let j = mockProxy();
+      let newUrl = j.getUrlForProxy('/appium/something');
 
       should.exist(newUrl);
     });
@@ -202,6 +213,32 @@ describe('proxy', function () {
       await j.proxyReqRes(req, res);
       res.sentCode.should.equal(100);
       res.sentBody.should.eql({value: {message: 'chrome not reachable'}});
+    });
+  });
+  describe('endpointRequiresSessionId', function () {
+    const j = mockProxy({sessionId: '123'});
+
+    [
+      '/session/82a9b7da-faaf-4a1d-8ef3-5e4fb5812200',
+      '/session/82a9b7da-faaf-4a1d-8ef3-5e4fb5812200/',
+      '/session/82a9b7da-faaf-4a1d-8ef3-5e4fb5812200/url',
+      '/session/82a9b7da-faaf-4a1d-8ef3-5e4fb5812200/element/3d001db2-7987-42a7-975d-8d5d5304083f',
+    ].forEach(function (endpoint) {
+        it(`should be true with ${endpoint}`, function () {
+          j.endpointRequiresSessionId(endpoint).should.be.true;
+        });
+    });
+
+    [
+      '/session',
+      '/session/',
+      '/sessions',
+      '/appium/sessions',
+      '/status',
+    ].forEach(function (endpoint) {
+        it(`should be false with ${endpoint}`, function () {
+          j.endpointRequiresSessionId(endpoint).should.be.false;
+        });
     });
   });
 });

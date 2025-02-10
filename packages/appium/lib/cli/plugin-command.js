@@ -1,13 +1,13 @@
 import _ from 'lodash';
-import ExtensionCommand from './extension-command';
+import ExtensionCliCommand from './extension-command';
 import {KNOWN_PLUGINS} from '../constants';
 
 const REQ_PLUGIN_FIELDS = ['pluginName', 'mainClass'];
 
 /**
- * @extends {ExtensionCommand<PluginType>}
+ * @extends {ExtensionCliCommand<PluginType>}
  */
-export default class PluginCommand extends ExtensionCommand {
+export default class PluginCliCommand extends ExtensionCliCommand {
   /**
    *
    * @param {import('./extension-command').ExtensionCommandOptions<PluginType>} opts
@@ -57,7 +57,25 @@ export default class PluginCommand extends ExtensionCommand {
    * @returns {Promise<import('./extension-command').RunOutput>}
    */
   async run({plugin, scriptName, extraArgs}) {
-    return await super._run({installSpec: plugin, scriptName, extraArgs});
+    return await super._run({
+      installSpec: plugin,
+      scriptName,
+      extraArgs,
+      bufferOutput: this.isJsonOutput,
+    });
+  }
+
+  /**
+   * Runs doctor checks for the given plugin
+   *
+   * @param {PluginDoctorOptions} opts
+   * @returns {Promise<number>} The amount of executed doctor checks.
+   * @throws {Error} If any of the mandatory Doctor checks fails.
+   */
+  async doctor({plugin}) {
+    return await super._doctor({
+      installSpec: plugin,
+    });
   }
 
   /**
@@ -105,7 +123,7 @@ export default class PluginCommand extends ExtensionCommand {
  */
 
 /**
- * Options for {@linkcode PluginCommand.install}
+ * Options for {@linkcode PluginCliCommand.install}
  * @typedef PluginInstallOpts
  * @property {string} plugin - the name or spec of a plugin to install
  * @property {InstallType} installType - how to install this plugin. One of the INSTALL_TYPES
@@ -117,22 +135,28 @@ export default class PluginCommand extends ExtensionCommand {
  */
 
 /**
- * Options for {@linkcode PluginCommand.uninstall}
+ * Options for {@linkcode PluginCliCommand.uninstall}
  * @typedef PluginUninstallOpts
  * @property {string} plugin - the name or spec of a plugin to uninstall
  */
 
 /**
- * Options for {@linkcode PluginCommand.update}
+ * Options for {@linkcode PluginCliCommand.update}
  * @typedef PluginUpdateOpts
  * @property {string} plugin - the name of the plugin to update
  * @property {boolean} unsafe - if true, will perform unsafe updates past major revision boundaries
  */
 
 /**
- * Options for {@linkcode PluginCommand.run}.
+ * Options for {@linkcode PluginCliCommand.run}.
  * @typedef PluginRunOptions
  * @property {string} plugin - name of the plugin to run a script from
  * @property {string} scriptName - name of the script to run
  * @property {string[]} [extraArgs] - arguments to pass to the script
+ */
+
+/**
+ * Options for {@linkcode PluginCliCommand.doctor}.
+ * @typedef PluginDoctorOptions
+ * @property {string} plugin - name of the plugin to run doctor checks for
  */

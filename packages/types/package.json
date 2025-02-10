@@ -1,6 +1,6 @@
 {
   "name": "@appium/types",
-  "version": "0.9.1",
+  "version": "0.24.0",
   "description": "Various type declarations used across Appium",
   "keywords": [
     "automation",
@@ -33,16 +33,15 @@
   ],
   "scripts": {
     "build": "node ./scripts/generate-schema-types.js",
-    "clean": "git checkout -- ./types/lib/appium-config.ts || true",
-    "test:smoke": "node ./index.js"
+    "clean": "git checkout -- ./lib/appium-config.ts || true",
+    "test:smoke": "node ./index.js",
+    "test:types": "tsd"
   },
   "dependencies": {
-    "@appium/schema": "^0.2.4",
-    "@appium/tsconfig": "^0.2.4",
-    "@types/express": "4.17.17",
-    "@types/npmlog": "4.1.4",
-    "@types/ws": "8.5.4",
-    "type-fest": "3.5.7"
+    "@appium/logger": "^1.6.1",
+    "@appium/schema": "^0.7.1",
+    "@appium/tsconfig": "^0.3.3",
+    "type-fest": "4.34.1"
   },
   "engines": {
     "node": "^14.17.0 || ^16.13.0 || >=18.0.0",
@@ -51,8 +50,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "gitHead": "84b211330dc84849af9cc1f3a5c5ad32e15b2e72",
-  "typedoc": {
-    "entryPoint": "./lib/index.ts"
-  }
+  "gitHead": "8480a85ce2fa466360e0fb1a7f66628331907f02"
 }

@@ -7,8 +7,6 @@ import {initMocks} from './mocks';
 import {version as APPIUM_VER} from '../../../package.json';
 import EventEmitter from 'events';
 
-const {expect} = chai;
-
 describe('Manifest', function () {
   /**
    * @type {sinon.SinonSandbox}
@@ -27,7 +25,15 @@ describe('Manifest', function () {
   /** @type {import('./mocks').MockGlob} */
   let MockGlob;
 
+  let expect;
+
   before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+    expect = chai.expect;
+
     yamlFixture = await fs.readFile(resolveFixture('manifest', 'v3.yaml'), 'utf8');
   });
 
@@ -40,7 +46,10 @@ describe('Manifest', function () {
     let overrides;
     ({MockPackageChanged, MockAppiumSupport, MockGlob, overrides, sandbox} = initMocks());
     MockAppiumSupport.fs.readFile.resolves(yamlFixture);
-    ({Manifest} = rewiremock.proxy(() => require('../../../lib/extension/manifest'), overrides));
+    ({Manifest} = rewiremock.proxy(() => require('../../../lib/extension/manifest'), {
+      ...overrides,
+      '../../../lib/extension/manifest-migrations.js': {migrate: sandbox.stub().resolves()},
+    }));
 
     Manifest.getInstance.cache = new Map();
   });
@@ -140,7 +149,7 @@ describe('Manifest', function () {
         });
 
         it('should create a new file', function () {
-          expect(MockAppiumSupport.fs.writeFile).to.be.calledOnce;
+          MockAppiumSupport.fs.writeFile.calledOnce.should.be.true;
         });
       });
 
@@ -176,10 +185,10 @@ describe('Manifest', function () {
           await B.all([manifest.read(), manifest.read()]);
         });
         it('should not read the file twice', function () {
-          expect(MockAppiumSupport.fs.readFile).to.have.been.calledOnceWith(
+          MockAppiumSupport.fs.readFile.calledOnceWith(
             '/some/path/extensions.yaml',
             'utf8'
-          );
+          ).should.be.true;
         });
       });
 
@@ -190,15 +199,16 @@ describe('Manifest', function () {
         });
 
         it('should attempt to read the file at `filepath`', function () {
-          expect(MockAppiumSupport.fs.readFile).to.have.been.calledOnceWith(
+          MockAppiumSupport.fs.readFile.calledOnceWith(
             '/some/path/extensions.yaml',
             'utf8'
-          );
+          ).should.be.true;
         });
 
         describe('when the data has not changed', function () {
           it('should not write the data', function () {
-            expect(manifest.write).not.to.be.called;
+            // @ts-ignore
+            manifest.write.called.should.be.false;
           });
         });
 
@@ -215,12 +225,13 @@ describe('Manifest', function () {
 
           it('should synchronize manifest with installed extensions', async function () {
             await manifest.read();
-            expect(manifest.syncWithInstalledExtensions).to.be.calledOnce;
+            // @ts-ignore
+            manifest.syncWithInstalledExtensions.calledOnce.should.be.true;
           });
 
           it('should check if the `package.json` has changed', async function () {
             await manifest.read();
-            expect(MockPackageChanged.isPackageChanged).to.be.calledOnce;
+            MockPackageChanged.isPackageChanged.calledOnce.should.be.true;
           });
         });
       });
@@ -255,7 +266,7 @@ describe('Manifest', function () {
         describe('when called again before the first call resolves', function () {
           it('should not write the file twice', async function () {
             await B.all([manifest.write(), manifest.write()]);
-            expect(MockAppiumSupport.fs.writeFile).to.have.been.calledOnce;
+            MockAppiumSupport.fs.writeFile.calledOnce.should.be.true;
           });
         });
 
