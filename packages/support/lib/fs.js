@@ -10,9 +10,10 @@ import {
   promises as fsPromises,
   read,
   write,
+  rmSync,
   open,
 } from 'fs';
-import glob from 'glob';
+import { glob } from 'glob';
 import klaw from 'klaw';
 import _ from 'lodash';
 import mv from 'mv';
@@ -20,11 +21,10 @@ import ncp from 'ncp';
 import path from 'path';
 import pkgDir from 'pkg-dir';
 import readPkg from 'read-pkg';
-import rimrafIdx from 'rimraf';
 import sanitize from 'sanitize-filename';
 import which from 'which';
 import log from './logger';
-import Timer from './timing';
+import {Timer} from './timing';
 import {isWindows} from './system';
 import {pluralize} from './util';
 
@@ -84,17 +84,23 @@ const fs = {
 
   /**
    * Remove a directory and all its contents, recursively
-   * @todo Replace with `rm()` from `fs.promises` when Node.js v12 support is dropped.
+   * @param {PathLike} filepath
+   * @returns Promise<void>
+   * @see https://nodejs.org/api/fs.html#fspromisesrmpath-options
    */
-  rimraf: /** @type {(dirpath: string, opts?: import('rimraf').Options) => Promise<void>} */ (
-    B.promisify(rimrafIdx)
-  ),
+  async rimraf(filepath) {
+    return await fsPromises.rm(filepath, {recursive: true, force: true});
+  },
 
   /**
-   * Alias of {@linkcode rimrafIdx.sync}
-   * @todo Replace with `rmSync()` from `fs` when Node.js v12 support is dropped.
+   * Remove a directory and all its contents, recursively in sync
+   * @param {PathLike} filepath
+   * @returns undefined
+   * @see https://nodejs.org/api/fs.html#fsrmsyncpath-options
    */
-  rimrafSync: rimrafIdx.sync,
+  rimrafSync(filepath) {
+    return rmSync(filepath, {recursive: true, force: true});
+  },
 
   /**
    * Like Node.js' `fsPromises.mkdir()`, but will _not_ reject if the directory already exists.
@@ -152,7 +158,9 @@ const fs = {
    * Given a glob pattern, resolve with list of files matching that pattern
    * @see https://github.com/isaacs/node-glob
    */
-  glob: /** @type {(pattern: string, opts?: glob.IOptions) => B<string[]>} */ (B.promisify(glob)),
+  glob: /** @type {(pattern: string, opts?: import('glob').GlobOptions) => B<string[]>} */ (
+    (pattern, options) => B.resolve(options ? glob(pattern, options) : glob(pattern))
+  ),
 
   /**
    * Sanitize a filename
@@ -211,8 +219,8 @@ const fs = {
    * @throws {Error} If the `dir` parameter contains a path to an invalid folder
    * @returns {Promise<string?>} returns the found path or null if the item was not found
    */
+  // eslint-disable-next-line promise/prefer-await-to-callbacks
   async walkDir(dir, recursive, callback) {
-    //eslint-disable-line promise/prefer-await-to-callbacks
     let isValidRoot = false;
     let errMsg = null;
     try {
@@ -231,6 +239,7 @@ const fs = {
     let directoryCount = 0;
     const timer = new Timer().start();
     return await new B(function (resolve, reject) {
+      /** @type {Promise} */
       let lastFileProcessed = B.resolve();
       walker = klaw(dir, {
         depthLimit: recursive ? -1 : 0,
@@ -245,16 +254,18 @@ const fs = {
             directoryCount++;
           }
 
-          // eslint-disable-next-line promise/prefer-await-to-callbacks
-          lastFileProcessed = B.try(async () => await callback(item.path, item.stats.isDirectory()))
-            .then(function (done = false) {
+          lastFileProcessed = (async () => {
+            try {
+              // eslint-disable-next-line promise/prefer-await-to-callbacks
+              const done = await callback(item.path, item.stats.isDirectory());
               if (done) {
-                resolve(item.path);
-              } else {
-                walker.resume();
+                return resolve(item.path);
               }
-            })
-            .catch(reject);
+              walker.resume();
+            } catch (err) {
+              return reject(err);
+            }
+          })();
         })
         .on('error', function (err, item) {
           log.warn(`Got an error while walking '${item.path}': ${err.message}`);
@@ -265,14 +276,15 @@ const fs = {
           }
         })
         .on('end', function () {
-          lastFileProcessed
-            .then((file) => {
-              resolve(/** @type {string|undefined} */ (file) ?? null);
-            })
-            .catch(function (err) {
+          (async () => {
+            try {
+              const file = await lastFileProcessed;
+              return resolve(/** @type {string|undefined} */ (file) ?? null);
+            } catch (err) {
               log.warn(`Unexpected error: ${err.message}`);
-              reject(err);
-            });
+              return reject(err);
+            }
+          })();
         });
     }).finally(function () {
       log.debug(
@@ -290,12 +302,14 @@ const fs = {
    * @param {string} dir - Directory to search from
    * @param {import('read-pkg').Options} [opts] - Additional options for `read-pkg`
    * @throws {Error} If there were problems finding or reading a `package.json` file
-   * @returns {object} A parsed `package.json`
+   * @returns {import('read-pkg').NormalizedPackageJson} A parsed `package.json`
    */
   readPackageJsonFrom(dir, opts = {}) {
     const cwd = fs.findRoot(dir);
     try {
-      return readPkg.sync({...opts, cwd});
+      return readPkg.sync(
+        /** @type {import('read-pkg').NormalizeOptions} */ ({normalize: true, ...opts, cwd})
+      );
     } catch (err) {
       err.message = `Failed to read a \`package.json\` from dir \`${dir}\`:\n\n${err.message}`;
       throw err;
@@ -385,7 +399,7 @@ export default fs;
  * @callback WalkDirCallback
  * @param {string} itemPath The path of the file or folder
  * @param {boolean} isDirectory Shows if it is a directory or a file
- * @return {boolean} return true if you want to stop walking
+ * @return {boolean|void} return true if you want to stop walking
  */
 
 /**

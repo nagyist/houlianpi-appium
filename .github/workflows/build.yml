@@ -1,28 +1,90 @@
 name: Appium Build
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - master
+    # this list of paths could potentially impact the build
+    paths:
+      - '**/tsconfig*.json'
+      - 'packages/base-driver/static/**/*'
+      - 'packages/*/test/**'
+      - 'packages/*/bin'
+      - 'packages/**/*.ts'
+      - 'packages/**/*.json'
+      - 'packages/**/*.js'
+      - 'package*.json'
+      - 'lerna.json'
+      - '.npmrc'
+      - '.mocharc.js'
+      - '.github/workflows/build.yml' # this file
+      - '.eslintrc'
+      - '.eslintignore'
+      - '!**/sample-code/**'
+      - '!packages/*/docs/**'
+  pull_request:
+    branches:
+      - master
+    paths:
+      - '**/tsconfig*.json'
+      - 'packages/base-driver/static/**/*'
+      - 'packages/*/test/**'
+      - 'packages/*/bin'
+      - 'packages/**/*.ts'
+      - 'packages/**/*.json'
+      - 'packages/**/*.js'
+      - 'package*.json'
+      - 'lerna.json'
+      - '.npmrc'
+      - '.mocharc.js'
+      - '.github/workflows/build.yml' # this file
+      - '.eslintrc'
+      - '.eslintignore'
+      - '!**/sample-code/**'
+      - '!packages/*/docs/**'
+
+env:
+  CI: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Tests
+  prepare_matrix:
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.generate-matrix.outputs.active }}
+    steps:
+    - name: Select all active LTS versions of Node.js
+      id: generate-matrix
+      uses: msimerson/node-lts-versions@v1
+
+  test:
+    needs:
+    - prepare_matrix
+    name: Tests
     strategy:
       matrix:
-        node-version: [14.x, 16.x, 18.x]
-
+        node-version: ${{ fromJSON(needs.prepare_matrix.outputs.versions) }}
+        os:
+        - ubuntu-latest
+        # TODO: Windows is not stable and slow to run
+        # - windows-latest
+        # TODO: Enable below envs after all tests have been verified green
+        # - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3
+      - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@64ed1c7eab4cce3362f8c340dee64e5eaeef8f7c # v3
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-      - name: Install latest npm
-        run: npm install -g npm
       - name: Install dependencies
-        uses: bahmutov/npm-install@1a235c31658a322a3b024444759650ee6345c26d # tag=v1
+        uses: bahmutov/npm-install@v1
         with:
           useRollingCache: true
           install-command: npm ci --foreground-scripts
@@ -33,33 +95,11 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3
+      - uses: actions/checkout@v4
       - name: Install dependencies
-        uses: bahmutov/npm-install@1a235c31658a322a3b024444759650ee6345c26d # tag=v1
+        uses: bahmutov/npm-install@v1
         with:
           useRollingCache: true
           install-command: npm ci
       - name: ESLint
-        run: npm run lint
-      - name: Validate Renovate Config
-        uses: rinchsan/renovate-config-validator@1ea1e8514f6a33fdd71c40b0a5fa3512b9e7b936 # tag=v0
-        with:
-          pattern: '{.renovaterc.json,renovate/default.json}'
-
-  docs:
-    name: Docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3
-      - name: Install dependencies (node)
-        uses: bahmutov/npm-install@1a235c31658a322a3b024444759650ee6345c26d # tag=v1
-        with:
-          useRollingCache: true
-          install-command: npm ci
-      - name: Install dependencies (python)
-        run: pip install -r packages/docutils/requirements.txt
-      - name: Build Docs
-        run: |
-          git config user.name 'Appium Bot'
-          git config user.email 'appium@appium.io'
-          npm run --workspace packages/appium build:docs
+        run: npm run lint:ci

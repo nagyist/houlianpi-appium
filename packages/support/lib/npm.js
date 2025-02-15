@@ -1,7 +1,7 @@
 // @ts-check
 
 import path from 'path';
-import semver from 'semver';
+import * as semver from 'semver';
 import {hasAppiumDependency} from './env';
 import {exec} from 'teen_process';
 import {fs} from './fs';
@@ -44,11 +44,16 @@ export class NPM {
    * @param {Omit<TeenProcessExecOptions, 'cwd'>} [execOpts]
    */
   async exec(cmd, args, opts, execOpts = {}) {
-    let {cwd, json, lockFile} = opts;
+    const {cwd, json, lockFile} = opts;
 
     // make sure we perform the current operation in cwd
     /** @type {TeenProcessExecOptions} */
-    const teenProcessExecOpts = {...execOpts, cwd};
+    const teenProcessExecOpts = {
+      ...execOpts,
+      // https://github.com/nodejs/node/issues/52572
+      shell: system.isWindows() || execOpts.shell,
+      cwd,
+    };
 
     args.unshift(cmd);
     if (json) {
@@ -72,7 +77,7 @@ export class NPM {
       // guaranteed to be parseable
       try {
         ret.json = JSON.parse(stdout);
-      } catch (ign) {}
+      } catch {}
     } catch (e) {
       const {
         stdout = '',
@@ -192,11 +197,11 @@ export class NPM {
   /**
    * Installs a package w/ `npm`
    * @param {string} cwd
-   * @param {string} pkgName
+   * @param {string} installStr - as in "npm install <installStr>"
    * @param {InstallPackageOpts} opts
    * @returns {Promise<NpmInstallReceipt>}
    */
-  async installPackage(cwd, pkgName, {pkgVer, installType} = {}) {
+  async installPackage(cwd, installStr, {pkgName, installType}) {
     /** @type {any} */
     let dummyPkgJson;
     const dummyPkgPath = path.join(cwd, 'package.json');
@@ -211,7 +216,7 @@ export class NPM {
       }
     }
 
-    const installOpts = ['--save-dev'];
+    const installOpts = ['--save-dev', '--no-progress', '--no-audit'];
     if (!(await hasAppiumDependency(cwd))) {
       if (process.env.APPIUM_OMIT_PEER_DEPS) {
         installOpts.push('--omit=peer');
@@ -220,7 +225,7 @@ export class NPM {
     }
 
     const cmd = installType === 'local' ? 'link' : 'install';
-    const res = await this.exec(cmd, [...installOpts, pkgVer ? `${pkgName}@${pkgVer}` : pkgName], {
+    const res = await this.exec(cmd, [...installOpts, installStr], {
       cwd,
       json: true,
       lockFile: this._getInstallLockfilePath(cwd),
@@ -262,6 +267,19 @@ export class NPM {
       lockFile: this._getInstallLockfilePath(cwd),
     });
   }
+
+  /**
+   * @param {string} pkg Npm package spec to query
+   * @param {string[]} [entries=[]] Field names to be included into the
+   * resulting output. By default all fields are included.
+   * @returns {Promise<import('@appium/types').StringRecord>}
+   */
+  async getPackageInfo(pkg, entries = []) {
+    return (await this.exec('info', [pkg, ...entries], {
+      cwd: process.cwd(),
+      json: true,
+    })).json;
+  }
 }
 
 export const npm = new NPM();
@@ -269,8 +287,8 @@ export const npm = new NPM();
 /**
  * Options for {@link NPM.installPackage}
  * @typedef InstallPackageOpts
+ * @property {string} pkgName - the name of the package to install
  * @property {import('type-fest').LiteralUnion<'local', string>} [installType] - whether to install from a local path or from npm
- * @property {string} [pkgVer] - the version of the package to install
  */
 
 /**

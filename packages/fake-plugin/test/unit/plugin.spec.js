@@ -1,5 +1,11 @@
-import FakePlugin from '../../lib/plugin';
+import {FakePlugin as _FakePlugin} from '../../lib/plugin';
 import B from 'bluebird';
+
+// Let's not use the actual FakePlugin because it runs a timer and we don't want to worry about
+// needing to clean up timers so that unit test processes can exit!
+class FakePlugin extends _FakePlugin {
+  _clockRunning = false;
+}
 
 class FakeExpress {
   constructor() {
@@ -25,6 +31,15 @@ class FakeExpress {
 }
 
 describe('fake plugin', function () {
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+  });
+
   it('should exist', function () {
     should.exist(FakePlugin);
   });

@@ -3,6 +3,13 @@
 import {NPM} from '../../lib/npm';
 
 describe('npm', function () {
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    should = chai.should();
+  });
+
   describe('getLatestSafeUpgradeFromVersions()', function () {
     const versions1 = [
       '0.1.0',
@@ -37,6 +44,4 @@ describe('npm', function () {
       (null === npm.getLatestSafeUpgradeFromVersions('10', versions1)).should.be.true;
     });
   });
-
-  it('should have many more unit tests');
 });

@@ -1,15 +1,13 @@
 import _ from 'lodash';
 import {errors} from 'appium/driver';
-import {util} from 'appium/support';
+import {util} from '@appium/support';
 import log from './logger';
-import {DEFAULT_SETTINGS} from './finder';
+import {
+  IMAGE_STRATEGY, DEFAULT_SETTINGS, IMAGE_TAP_STRATEGIES,
+  IMAGE_ELEMENT_PREFIX, IMAGE_EL_TAP_STRATEGY_W3C,
+} from './constants';
 
-const IMAGE_ELEMENT_PREFIX = 'appium-image-element-';
 const TAP_DURATION_MS = 125;
-const IMAGE_EL_TAP_STRATEGY_W3C = 'w3cActions';
-const IMAGE_EL_TAP_STRATEGY_MJSONWP = 'touchActions';
-const IMAGE_TAP_STRATEGIES = [IMAGE_EL_TAP_STRATEGY_MJSONWP, IMAGE_EL_TAP_STRATEGY_W3C];
-const DEFAULT_TEMPLATE_IMAGE_SCALE = 1.0;
 
 /**
  * @typedef Dimension
@@ -24,27 +22,40 @@ const DEFAULT_TEMPLATE_IMAGE_SCALE = 1.0;
  */
 
 /**
+ * @typedef ImageElementOpts
+ * @property {Buffer} template - the image which was used to find this ImageElement
+ * @property {Rect} rect - bounds of matched image element
+ * @property {number} score The similarity score as a float number in range [0.0, 1.0].
+ * 1.0 is the highest score (means both images are totally equal).
+ * @property {Buffer?} match - the image which has matched marks. Defaults to null.
+ * @property {import('./finder').default?} finder - the finder we can use to re-check stale elements
+ * @property {import('@appium/types').Rect?} containerRect - The bounding
+ * rectangle to limit the search in
+ */
+
+/**
  * Representation of an "image element", which is simply a set of coordinates
  * and methods that can be used on that set of coordinates via the driver
  */
 export default class ImageElement {
   /**
-   * @param {string} b64Template - the base64-encoded image which was used to
-   *                               find this ImageElement
-   * @param {Rect} rect - bounds of matched image element
-   * @param {number} score The similarity score as a float number in range [0.0, 1.0].
-   * 1.0 is the highest score (means both images are totally equal).
-   * @param {string?} b64Result - the base64-encoded image which has matched marks.
-   *                              Defaults to null.
-   * @param {import('./finder').default?} finder - the finder we can use to re-check stale elements
+   * @param {ImageElementOpts} options
    */
-  constructor(b64Template, rect, score, b64Result = null, finder = null) {
-    this.template = b64Template;
+  constructor({
+    template,
+    rect,
+    score,
+    match = null,
+    finder = null,
+    containerRect = null,
+  }) {
+    this.template = template;
     this.rect = rect;
     this.id = `${IMAGE_ELEMENT_PREFIX}${util.uuidV4()}`;
-    this.b64MatchedImage = b64Result;
+    this.match = match;
     this.score = score;
     this.finder = finder;
+    this.containerRect = containerRect;
   }
 
   /**
@@ -72,20 +83,25 @@ export default class ImageElement {
   }
 
   /**
-   * @returns {?string} - the base64-encoded image which has matched marks
+   * @returns {string} - the base64-encoded original image used for matching
    */
-  get matchedImage() {
-    return this.b64MatchedImage;
+  get originalImage() {
+    return this.template.toString('base64');
   }
 
   /**
-   * @param {string} protocolKey - the protocol-specific JSON key for
-   * a WebElement
+   * @returns {string|null} - the base64-encoded image which has matched marks
+   */
+  get matchedImage() {
+    return this.match?.toString('base64') ?? null;
+  }
+
+  /**
    *
    * @returns {Element} - this image element as a WebElement
    */
-  asElement(protocolKey) {
-    return {[protocolKey]: this.id};
+  asElement() {
+    return util.wrapElement(this.id);
   }
 
   /**
@@ -107,12 +123,11 @@ export default class ImageElement {
    * Use a driver to tap the screen at the center of this ImageElement's
    * position
    *
-   * @param {BaseDriver} driver - driver for calling actions with
+   * @param {import('appium/driver').BaseDriver} driver - driver for calling actions with
    */
   async click(driver) {
     // before we click we need to make sure the element is actually still there
     // where we expect it to be
-    let newImgEl;
     const settings = Object.assign({}, DEFAULT_SETTINGS, driver.settings.getSettings());
     const {
       autoUpdateImageElementPosition: updatePos,
@@ -129,16 +144,20 @@ export default class ImageElement {
       );
     }
 
+    let newImgEl;
     if (checkForImageElementStaleness || updatePos) {
       log.info('Checking image element for staleness before clicking');
       try {
-        newImgEl = await this.finder.findByImage(this.template, {
-          shouldCheckStaleness: true,
-          // Set ignoreDefaultImageTemplateScale because this.template is device screenshot based image
-          // managed inside Appium after finidng image by template which managed by a user
-          ignoreDefaultImageTemplateScale: true,
-        });
-      } catch (err) {
+        newImgEl = /** @type {ImageElement} */ (await (/** @type {import('./finder').default} */ (this.finder))
+          .findByImage(
+            this.template, driver, {
+            shouldCheckStaleness: true,
+            // Set ignoreDefaultImageTemplateScale because this.template is device screenshot based image
+            // managed inside Appium after finidng image by template which managed by a user
+            ignoreDefaultImageTemplateScale: true,
+            containerRect: this.containerRect,
+          }));
+      } catch {
         throw new errors.StaleElementReferenceError();
       }
 
@@ -182,7 +201,7 @@ export default class ImageElement {
       };
 
       // check if the driver has the appropriate performActions method
-      if (driver.performActions) {
+      if ('performActions' in driver && _.isFunction(driver.performActions)) {
         return await driver.performActions([action]);
       }
 
@@ -198,7 +217,7 @@ export default class ImageElement {
       options: {x, y},
     };
 
-    if (driver.performTouch) {
+    if ('performTouch' in driver && _.isFunction(driver.performTouch)) {
       return await driver.performTouch([action]);
     }
 
@@ -210,19 +229,43 @@ export default class ImageElement {
   }
 
   /**
+   * Perform lookup of image element(s) inside of the current element
+   *
+   * @param {boolean} multiple - Whether to lookup multiple elements
+   * @param {import('appium/driver').BaseDriver} driver - The driver to use for commands
+   * @param  {string[]} args = Rest of arguments for executeScripts
+   * @returns {Promise<Element|Element[]|ImageElement>} - WebDriver element with a special id prefix
+   */
+  async find(multiple, driver, ...args) {
+    const [strategy, selector] = args;
+    if (strategy !== IMAGE_STRATEGY) {
+      throw new errors.InvalidSelectorError(`Lookup strategies other than '${IMAGE_STRATEGY}' are not supported`);
+    }
+    return await (/** @type {import('./finder').default} */ (this.finder)).findByImage(
+      Buffer.from(selector, 'base64'),
+      driver,
+      {multiple, containerRect: this.rect}
+    );
+  }
+
+  /**
    * Handle various Appium commands that involve an image element
    *
    * @param {import('appium/driver').BaseDriver} driver - the driver to use for commands
    * @param {string} cmd - the name of the driver command
-   * @param {string} imgElId - the id of the ImageElement to work with
+   * @param {any} imgEl - image element object
    * @param {string[]} args - Rest of arguments for executeScripts
    *
-   * @returns {object} - the result of running a command
+   * @returns {Promise<any>} - the result of running a command
    */
   static async execute(driver, imgEl, cmd, ...args) {
     switch (cmd) {
       case 'click':
         return await imgEl.click(driver);
+      case 'findElementFromElement':
+        return await imgEl.find(false, driver, ...args);
+      case 'findElementsFromElement':
+        return await imgEl.find(true, driver, ...args);
       case 'elementDisplayed':
         return true;
       case 'getSize':
@@ -232,6 +275,8 @@ export default class ImageElement {
         return imgEl.location;
       case 'getElementRect':
         return imgEl.rect;
+      case 'getElementScreenshot':
+        return imgEl.originalImage;
       case 'getAttribute':
         // /session/:sessionId/element/:elementId/attribute/:name
         // /session/:sessionId/element/:elementId/attribute/visual should retun the visual data
@@ -250,13 +295,7 @@ export default class ImageElement {
   }
 }
 
-export {
-  ImageElement,
-  IMAGE_EL_TAP_STRATEGY_MJSONWP,
-  IMAGE_EL_TAP_STRATEGY_W3C,
-  DEFAULT_TEMPLATE_IMAGE_SCALE,
-  IMAGE_ELEMENT_PREFIX,
-};
+export {ImageElement};
 
 /**
  * @typedef {import('@appium/types').Rect} Rect

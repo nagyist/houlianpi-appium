@@ -5,11 +5,11 @@ import archiver from 'archiver';
 import {createWriteStream} from 'fs';
 import path from 'path';
 import stream from 'stream';
-import fs from './fs';
+import {fs} from './fs';
 import {isWindows} from './system';
 import {Base64Encode} from 'base64-stream';
 import {toReadableSizeString, GiB} from './util';
-import Timer from './timing';
+import {Timer} from './timing';
 import log from './logger';
 import getStream from 'get-stream';
 import {exec} from 'teen_process';
@@ -17,6 +17,7 @@ import {exec} from 'teen_process';
 /**
  * @type {(path: string, options?: yauzl.Options) => Promise<yauzl.ZipFile>}
  */
+// eslint-disable-next-line import/no-named-as-default-member
 const openZip = B.promisify(yauzl.open);
 /**
  * @type {(source: NodeJS.ReadableStream, destination: NodeJS.WritableStream) => Promise<NodeJS.WritableStream>}
@@ -138,6 +139,7 @@ class ZipExtractor {
     const openReadStream = B.promisify(this.zipfile.openReadStream.bind(this.zipfile));
     const readStream = await openReadStream(entry);
     if (isSymlink) {
+      // @ts-ignore This typecast is ok
       const link = await getStream(readStream);
       await fs.symlink(link, dest);
     } else {
@@ -228,7 +230,7 @@ async function extractWithSystemUnzip(zipFilePath, destDir) {
   let executablePath;
   try {
     executablePath = await getExecutablePath(isWindowsHost ? 'powershell.exe' : 'unzip');
-  } catch (e) {
+  } catch {
     throw new Error('Could not find system unzip');
   }
 
@@ -336,16 +338,16 @@ async function readEntries(zipFilePath, onEntry) {
 
 /**
  * @typedef ZipOptions
- * @property {boolean} encodeToBase64 [false] Whether to encode
+ * @property {boolean} [encodeToBase64=false] Whether to encode
  * the resulting archive to a base64-encoded string
- * @property {boolean} isMetered [true] Whether to log the actual
+ * @property {boolean} [isMetered=true] Whether to log the actual
  * archiver performance
- * @property {number} maxSize [1073741824] The maximum size of
+ * @property {number} [maxSize=1073741824] The maximum size of
  * the resulting archive in bytes. This is set to 1GB by default, because
  * Appium limits the maximum HTTP body size to 1GB. Also, the NodeJS heap
  * size must be enough to keep the resulting object (usually this size is
  * limited to 1.4 GB)
- * @property {number} level [9] The compression level. The maximum
+ * @property {number} [level=9] The compression level. The maximum
  * level is 9 (the best compression, worst performance). The minimum
  * compression level is 0 (no compression).
  */
@@ -485,8 +487,8 @@ async function assertValidZip(filePath) {
 
 /**
  * @typedef ZipSourceOptions
- * @property {string} pattern ['**\/*'] - GLOB pattern for compression
- * @property {string} cwd - The source root folder (the parent folder of
+ * @property {string} [pattern='**\/*'] - GLOB pattern for compression
+ * @property {string} [cwd] - The source root folder (the parent folder of
  * the destination file by default)
  * @property {string[]} [ignore] - The list of ignored patterns
  */

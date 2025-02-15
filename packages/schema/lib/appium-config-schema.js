@@ -1,5 +1,5 @@
 /**
- * The single-source-of-truth of the Appium server configuration
+ * The single-source-of-truth of the Appium server configuration.
  *
  * This defines _both_ what the CLI supports and what the config files support.
  */
@@ -21,13 +21,21 @@ export const AppiumConfigJsonSchema = /** @type {const} */ ({
       description: 'Configuration when running Appium as a server',
       properties: {
         address: {
-          $comment: 'I think hostname covers both DNS and IPv4...could be wrong',
           appiumCliAliases: ['a'],
           default: '0.0.0.0',
-          description: 'IP address to listen on',
-          format: 'hostname',
+          description: 'IPv4/IPv6 address or a hostname to listen on',
           title: 'address config',
           type: 'string',
+          anyOf: [
+            {
+              type: 'string',
+              format: 'hostname',
+            },
+            {
+              type: 'string',
+              format: 'ipv6',
+            },
+          ],
         },
         'allow-cors': {
           description:
@@ -163,6 +171,14 @@ export const AppiumConfigJsonSchema = /** @type {const} */ ({
           title: 'log-level config',
           type: 'string',
         },
+        'log-format': {
+          appiumCliDest: 'logFormat',
+          default: 'text',
+          description: 'Log format (text|json|pretty_json)',
+          enum: ['text', 'json', 'pretty_json'],
+          title: 'log-format config',
+          type: 'string',
+        },
         'log-no-colors': {
           default: false,
           description: 'Do not use color in console output',
@@ -175,6 +191,20 @@ export const AppiumConfigJsonSchema = /** @type {const} */ ({
           title: 'log-timestamp config',
           type: 'boolean',
         },
+        'plugins-import-chunk-size': {
+          default: 7,
+          description:
+            'The maximum amount of plugins that could be imported in parallel on server startup',
+          title: 'plugins-import-chunk-size config',
+          type: 'number',
+        },
+        'drivers-import-chunk-size': {
+          default: 3,
+          description:
+            'The maximum amount of drivers that could be imported in parallel on server startup',
+          title: 'drivers-import-chunk-size config',
+          type: 'number',
+        },
         'long-stacktrace': {
           default: false,
           description: 'Add long stack traces to log entries. Recommended for debugging only.',
@@ -183,7 +213,7 @@ export const AppiumConfigJsonSchema = /** @type {const} */ ({
         },
         'no-perms-check': {
           default: false,
-          description: 'Do not check that needed files are readable and/or writable',
+          description: 'Skip various permission checks on the server startup if set to true',
           title: 'no-perms-check config',
           type: 'boolean',
         },
@@ -219,11 +249,33 @@ export const AppiumConfigJsonSchema = /** @type {const} */ ({
           type: 'boolean',
           appiumCliDest: 'relaxedSecurityEnabled',
         },
+        'shutdown-timeout': {
+          default: 5000,
+          description: 'For how long the server should delay its shutdown before force-closing all open connections to it. ' +
+            'Setting its value to zero should close the server without waiting for active connections.',
+          title: 'Graceful server shutdown timeout in milliseconds',
+          type: 'integer',
+          minimum: 0,
+        },
         'session-override': {
           default: false,
           description: 'Enables session override (clobbering)',
           title: 'session-override config',
           type: 'boolean',
+        },
+        'ssl-cert-path': {
+          description:
+            'Full path to the .cert file if TLS is used. Must be provided together with "ssl-key-path"',
+          title: '.cert file path',
+          appiumCliDest: 'sslCertificatePath',
+          type: 'string',
+        },
+        'ssl-key-path': {
+          description:
+            'Full path to the .key file if TLS is used. Must be provided together with "ssl-cert-path"',
+          title: '.key file path',
+          appiumCliDest: 'sslKeyPath',
+          type: 'string',
         },
         'strict-caps': {
           default: false,
@@ -338,7 +390,7 @@ export const AppiumConfigJsonSchema = /** @type {const} */ ({
           },
         },
         {
-          oneOf: [{$ref: '#/$defs/logFilterText'}, {$ref: '#/$defs/logFilterRegex'}],
+          anyOf: [{$ref: '#/$defs/logFilterText'}, {$ref: '#/$defs/logFilterRegex'}],
         },
       ],
     },

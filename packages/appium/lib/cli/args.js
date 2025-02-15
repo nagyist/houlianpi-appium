@@ -7,11 +7,12 @@ import {
   EXT_SUBCOMMAND_RUN,
   EXT_SUBCOMMAND_UNINSTALL,
   EXT_SUBCOMMAND_UPDATE,
+  EXT_SUBCOMMAND_DOCTOR,
 } from '../constants';
 import {INSTALL_TYPES} from '../extension/extension-config';
 import {toParserArgs} from '../schema/cli-args';
 const DRIVER_EXAMPLE = 'xcuitest';
-const PLUGIN_EXAMPLE = 'find_by_image';
+const PLUGIN_EXAMPLE = 'images';
 
 /**
  * This is necessary because we pass the array into `argparse`. `argparse` is bad and mutates things. We don't want that.
@@ -31,7 +32,7 @@ const globalExtensionArgs = new Map([
       required: false,
       default: false,
       action: 'store_true',
-      help: 'Use JSON for output format',
+      help: 'Return output in JSON format',
       dest: 'json',
     },
   ],
@@ -49,6 +50,7 @@ const getExtensionArgs = _.memoize(function getExtensionArgs() {
       [EXT_SUBCOMMAND_UNINSTALL]: makeUninstallArgs(type),
       [EXT_SUBCOMMAND_UPDATE]: makeUpdateArgs(type),
       [EXT_SUBCOMMAND_RUN]: makeRunArgs(type),
+      [EXT_SUBCOMMAND_DOCTOR]: makeDoctorArgs(type),
     };
   }
   return /** @type {Record<ExtensionType, Record<import('appium/types').CliExtensionSubcommand,ArgumentDefinitions>>} */ (
@@ -80,8 +82,18 @@ function makeListArgs(type) {
         required: false,
         default: false,
         action: 'store_true',
-        help: 'Show information about newer versions',
+        help: `Show information about available ${type} updates`,
         dest: 'showUpdates',
+      },
+    ],
+    [
+      ['--verbose'],
+      {
+        required: false,
+        default: false,
+        action: 'store_true',
+        help: `Show more information about each ${type}`,
+        dest: 'verbose',
       },
     ],
   ]);
@@ -100,9 +112,8 @@ function makeInstallArgs(type) {
       {
         type: 'str',
         help:
-          `Name of the ${type} to install, for example: ` + type === DRIVER_TYPE
-            ? DRIVER_EXAMPLE
-            : PLUGIN_EXAMPLE,
+          `Name of the ${type} to install, for example: ` +
+          (type === DRIVER_TYPE ? DRIVER_EXAMPLE : PLUGIN_EXAMPLE),
       },
     ],
     [
@@ -112,7 +123,7 @@ function makeInstallArgs(type) {
         default: null,
         choices: INSTALL_TYPES_ARRAY,
         help:
-          `Where to look for the ${type} if it is not one of Appium's verified ` +
+          `Where to look for the ${type} if it is not one of Appium's official ` +
           `${type}s. Possible values: ${INSTALL_TYPES_ARRAY.join(', ')}`,
         dest: 'installType',
       },
@@ -124,9 +135,8 @@ function makeInstallArgs(type) {
         default: null,
         type: 'str',
         help:
-          `If installing from Git or GitHub, the package name, as defined in the plugin's ` +
-          `package.json file in the "name" field, cannot be determined automatically, and ` +
-          `should be reported here, otherwise the install will probably fail.`,
+          `The Node.js package name of the ${type}. ` +
+          `Required if "source" is set to "git" or "github".`,
         dest: 'packageName',
       },
     ],
@@ -146,9 +156,28 @@ function makeUninstallArgs(type) {
       {
         type: 'str',
         help:
-          'Name of the driver to uninstall, for example: ' + type === DRIVER_TYPE
-            ? DRIVER_EXAMPLE
-            : PLUGIN_EXAMPLE,
+          `Name of the ${type} to uninstall, for example: ` +
+          (type === DRIVER_TYPE ? DRIVER_EXAMPLE : PLUGIN_EXAMPLE),
+      },
+    ],
+  ]);
+}
+
+/**
+ * Makes the opts for the `doctor` subcommand for each extension type
+ * @param {ExtensionType} type
+ * @returns {ArgumentDefinitions}
+ */
+function makeDoctorArgs(type) {
+  return new Map([
+    ...globalExtensionArgs,
+    [
+      [type],
+      {
+        type: 'str',
+        help:
+          `Name of the ${type} to run doctor checks for, for example: ` +
+          (type === DRIVER_TYPE ? DRIVER_EXAMPLE : PLUGIN_EXAMPLE),
       },
     ],
   ]);
@@ -167,13 +196,10 @@ function makeUpdateArgs(type) {
       {
         type: 'str',
         help:
-          `Name of the ${type} to update, or the word "installed" to update all installed ` +
-            `${type}s. To see available updates, run "appium ${type} list --installed --updates". ` +
-            'For example: ' +
-            type ===
-          DRIVER_TYPE
-            ? DRIVER_EXAMPLE
-            : PLUGIN_EXAMPLE,
+          `Name of the ${type} to update, or "installed" to update all installed ${type}s. ` +
+          `To see available ${type} updates, run "appium ${type} list --installed --updates". ` +
+          'For example: ' +
+          (type === DRIVER_TYPE ? DRIVER_EXAMPLE : PLUGIN_EXAMPLE),
       },
     ],
     [
@@ -183,8 +209,7 @@ function makeUpdateArgs(type) {
         default: false,
         action: 'store_true',
         help:
-          `Include updates that might have a new major revision, and potentially include ` +
-          `breaking changes`,
+          'Include any available major revision updates, which may have breaking changes',
       },
     ],
   ]);
@@ -203,19 +228,19 @@ function makeRunArgs(type) {
       {
         type: 'str',
         help:
-          `Name of the ${type} to run a script from, for example: ` + type === DRIVER_TYPE
-            ? DRIVER_EXAMPLE
-            : PLUGIN_EXAMPLE,
+          `Name of the ${type} to run a script from, for example: ` +
+          (type === DRIVER_TYPE ? DRIVER_EXAMPLE : PLUGIN_EXAMPLE),
       },
     ],
     [
       ['scriptName'],
       {
         default: null,
+        nargs: '?',
         type: 'str',
         help:
-          `Name of the script to run from the ${type}. The script name must be a key ` +
-          `inside the "appium.scripts" field inside the ${type}'s "package.json" file`,
+          `Name of the ${type} script to run. If not provided, return a list ` +
+          `of available scripts for this ${type}.`,
       },
     ],
   ]);
@@ -256,6 +281,16 @@ const serverArgsDisallowedInConfig = new Map([
     },
   ],
   [
+    ['--show-debug-info'],
+    {
+      dest: 'showDebugInfo',
+      action: 'store_const',
+      const: true,
+      required: false,
+      help: 'Show debug info about the current Appium deployment and exit',
+    },
+  ],
+  [
     ['--show-config'],
     {
       dest: 'showConfig',
@@ -284,5 +319,5 @@ export {getServerArgs, getExtensionArgs};
 
 /**
  * A tuple of argument aliases and argument options
- * @typedef {Map<string[],import('argparse').ArgumentOptions>} ArgumentDefinitions
+ * @typedef {Map<[name: string]|[name: string, alias: string],import('argparse').ArgumentOptions>} ArgumentDefinitions
  */

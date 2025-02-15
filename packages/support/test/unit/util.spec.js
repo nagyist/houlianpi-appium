@@ -1,5 +1,6 @@
 import {util, fs, tempDir} from '../../lib';
 import B from 'bluebird';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import os from 'os';
 import path from 'path';
@@ -9,6 +10,14 @@ const {W3C_WEB_ELEMENT_IDENTIFIER} = util;
 
 describe('util', function () {
   let sandbox;
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();
@@ -500,20 +509,6 @@ describe('util', function () {
     });
     it('should stringify null and undefined', function () {
       util.quote(['a', 1, null, undefined]).should.eql('a 1 null undefined');
-    });
-  });
-
-  describe('unleakString', function () {
-    it('should unleak a string', function () {
-      util.unleakString('yolo').should.eql('yolo');
-    });
-    it('should unleak a multiline string', function () {
-      util.unleakString(' yolo\nbolo ').should.eql(' yolo\nbolo ');
-    });
-    it('should convert an object to a string', function () {
-      for (const obj of [{}, null, undefined, [], 0]) {
-        util.unleakString(obj).should.eql(`${obj}`);
-      }
     });
   });
 

@@ -3,14 +3,12 @@
  */
 
 import B from 'bluebird';
-import glob from 'glob';
 import {env, fs} from '@appium/support';
 import _ from 'lodash';
 import path from 'path';
 import YAML from 'yaml';
 import {CURRENT_SCHEMA_REV, DRIVER_TYPE, PLUGIN_TYPE} from '../constants';
-import log from '../logger';
-import {INSTALL_TYPE_NPM} from './extension-config';
+import {INSTALL_TYPE_NPM, INSTALL_TYPE_DEV} from './extension-config';
 import {packageDidChange} from './package-changed';
 import {migrate} from './manifest-migrations';
 
@@ -148,47 +146,38 @@ export class Manifest {
    * Returns a new or existing {@link Manifest} instance, based on the value of `appiumHome`.
    *
    * Maintains one instance per value of `appiumHome`.
-   * @param {string} appiumHome - Path to `APPIUM_HOME`
-   * @returns {Manifest}
    */
-  static getInstance = _.memoize(function _getInstance(appiumHome) {
-    return new Manifest(appiumHome);
-  });
+  static getInstance = _.memoize(
+    /**
+     * @param {string} appiumHome - Path to `APPIUM_HOME`
+     * @returns {Manifest}
+     */
+    function _getInstance(appiumHome) {
+      return new Manifest(appiumHome);
+    }
+  );
 
   /**
    * Searches `APPIUM_HOME` for installed extensions and adds them to the manifest.
+   * @param {boolean} hasAppiumDependency - This affects whether or not the "dev" `InstallType` is used
    * @returns {Promise<boolean>} `true` if any extensions were added, `false` otherwise.
    */
-  async syncWithInstalledExtensions() {
+  async syncWithInstalledExtensions(hasAppiumDependency = false) {
     // this could be parallelized, but we can't use fs.walk as an async iterator
     let didChange = false;
 
     /**
      * Listener for the `match` event of a `glob` instance
      * @param {string} filepath - Path to a `package.json`
+     * @param {boolean} [devType] - If `true`, this is an extension in "dev mode"
      * @returns {Promise<void>}
      */
-    const onMatch = async (filepath) => {
+    const onMatch = async (filepath, devType = false) => {
       try {
         const pkg = JSON.parse(await fs.readFile(filepath, 'utf8'));
         if (isExtension(pkg)) {
-          const extType = isDriver(pkg) ? DRIVER_TYPE : PLUGIN_TYPE;
-          /**
-           * this should only be 'unknown' if the extension's `package.json` is invalid
-           * @type {string}
-           */
-          const name = isDriver(pkg)
-            ? pkg.appium.driverName
-            : isPlugin(pkg)
-            ? pkg.appium.pluginName
-            : '(unknown)';
-          if (
-            (isDriver(pkg) && !this.hasDriver(name)) ||
-            (isPlugin(pkg) && !this.hasPlugin(name))
-          ) {
-            log.info(`Discovered installed ${extType} "${name}"`);
-          }
-          const changed = this.addExtensionFromPackage(pkg, filepath);
+          const installType = devType && hasAppiumDependency ? INSTALL_TYPE_DEV : INSTALL_TYPE_NPM;
+          const changed = this.addExtensionFromPackage(pkg, filepath, installType);
           didChange = didChange || changed;
         }
       } catch {}
@@ -199,28 +188,19 @@ export class Manifest {
      * @type {Promise<void>[]}
      */
     const queue = [
-      // look at `package.json` in `APPIUM_HOME` only
-      onMatch(path.join(this.#appiumHome, 'package.json')),
+      // look at `package.json` in `APPIUM_HOME` only.
+      // this causes extensions in "dev mode" to be automatically found
+      onMatch(path.join(this.#appiumHome, 'package.json'), true),
     ];
 
     // add dependencies to the queue
-    await new B((resolve, reject) => {
-      glob(
-        'node_modules/{*,@*/*}/package.json',
-        {cwd: this.#appiumHome, silent: true, absolute: true},
-        // eslint-disable-next-line promise/prefer-await-to-callbacks
-        (err) => {
-          if (err) {
-            reject(err);
-          }
-          resolve();
-        }
-      )
-        .on('error', reject)
-        .on('match', (filepath) => {
-          queue.push(onMatch(filepath));
-        });
+    const filepaths = await fs.glob('node_modules/{*,@*/*}/package.json', {
+      cwd: this.#appiumHome,
+      absolute: true,
     });
+    for (const filepath of filepaths) {
+      queue.push(onMatch(filepath));
+    }
 
     // wait for everything to finish
     await B.all(queue);
@@ -252,19 +232,20 @@ export class Manifest {
    * @template {ExtensionType} ExtType
    * @param {ExtPackageJson<ExtType>} pkgJson
    * @param {string} pkgPath
+   * @param {typeof INSTALL_TYPE_NPM | typeof INSTALL_TYPE_DEV} [installType]
    * @returns {boolean} - `true` if this method did anything.
    */
-  addExtensionFromPackage(pkgJson, pkgPath) {
+  addExtensionFromPackage(pkgJson, pkgPath, installType = INSTALL_TYPE_NPM) {
     const extensionPath = path.dirname(pkgPath);
 
     /**
      * @type {InternalMetadata}
      */
     const internal = {
-      pkgName: pkgJson.name,
-      version: pkgJson.version,
+      pkgName: /** @type {string} */ (pkgJson.name),
+      version: /** @type {string} */ (pkgJson.version),
       appiumVersion: pkgJson.peerDependencies?.appium,
-      installType: INSTALL_TYPE_NPM,
+      installType,
       installSpec: `${pkgJson.name}@${pkgJson.version}`,
       installPath: extensionPath,
     };
@@ -275,7 +256,11 @@ export class Manifest {
         ...internal,
       };
       if (!_.isEqual(value, this.#data.drivers[pkgJson.appium.driverName])) {
-        this.setExtension(DRIVER_TYPE, pkgJson.appium.driverName, value);
+        this.setExtension(
+          /** @type {ExtType} */ (DRIVER_TYPE),
+          pkgJson.appium.driverName,
+          /** @type {ExtManifest<ExtType>} */ (value)
+        );
         return true;
       }
       return false;
@@ -285,7 +270,11 @@ export class Manifest {
         ...internal,
       };
       if (!_.isEqual(value, this.#data.plugins[pkgJson.appium.pluginName])) {
-        this.setExtension(PLUGIN_TYPE, pkgJson.appium.pluginName, value);
+        this.setExtension(
+          /** @type {ExtType} */ (PLUGIN_TYPE),
+          pkgJson.appium.pluginName,
+          /** @type {ExtManifest<ExtType>} */ (value)
+        );
         return true;
       }
       return false;
@@ -397,12 +386,8 @@ export class Manifest {
       try {
         const yaml = await fs.readFile(this.#manifestPath, 'utf8');
         data = YAML.parse(yaml);
-        log.debug(
-          `Parsed manifest file at ${this.#manifestPath}: ${JSON.stringify(data, null, 2)}`
-        );
       } catch (err) {
         if (err.code === 'ENOENT') {
-          log.debug(`No manifest file found at ${this.#manifestPath}; creating`);
           data = _.cloneDeep(INITIAL_MANIFEST_DATA);
           shouldWrite = true;
         } else {
@@ -428,11 +413,10 @@ export class Manifest {
        * file will get the latest schema revision, so we can skip the migration.
        */
       if (!shouldWrite && (data.schemaRev ?? 0) < CURRENT_SCHEMA_REV) {
-        log.debug(
-          `Updating manifest schema from rev ${data.schemaRev ?? '(none)'} to ${CURRENT_SCHEMA_REV}`
-        );
         shouldWrite = await migrate(this);
       }
+
+      const hasAppiumDependency = await env.hasAppiumDependency(this.appiumHome);
 
       /**
        * we still may want to sync with installed extensions even if we have a
@@ -445,13 +429,8 @@ export class Manifest {
        * It may also make sense to sync with the extensions in an arbitrary
        * `APPIUM_HOME`, but we don't do that here.
        */
-      if (
-        shouldWrite ||
-        ((await env.hasAppiumDependency(this.appiumHome)) &&
-          (await packageDidChange(this.appiumHome)))
-      ) {
-        log.debug('Discovering newly installed extensions...');
-        shouldWrite = (await this.syncWithInstalledExtensions()) || shouldWrite;
+      if (shouldWrite || (hasAppiumDependency && (await packageDidChange(this.appiumHome)))) {
+        shouldWrite = (await this.syncWithInstalledExtensions(hasAppiumDependency)) || shouldWrite;
       }
 
       if (shouldWrite) {

@@ -1,8 +1,6 @@
 import B from 'bluebird';
 import {BaseDriver, errors} from 'appium/driver';
-import {deprecatedCommandsLogged} from '@appium/base-driver/build/lib/protocol/protocol';
 import {FakeApp} from './fake-app';
-import {alert, contexts, element, find, general} from './commands';
 
 const FAKE_DRIVER_CONSTRAINTS = /** @type {const} */ ({
   app: {
@@ -12,25 +10,62 @@ const FAKE_DRIVER_CONSTRAINTS = /** @type {const} */ ({
   uniqueApp: {
     isBoolean: true,
   },
+  runClock: {
+    isBoolean: true,
+  },
 });
 
 /**
+ * Constraints for {@linkcode FakeDriver}'s capabilites
  * @typedef {typeof FAKE_DRIVER_CONSTRAINTS} FakeDriverConstraints
  */
 
 /**
+ * @template [Thing=any]
  * @extends {BaseDriver<FakeDriverConstraints>}
  * @implements {ExternalDriver<FakeDriverConstraints>}
  */
 export class FakeDriver extends BaseDriver {
-  desiredCapConstraints = FAKE_DRIVER_CONSTRAINTS;
+  /**
+   * @type {FakeDriverConstraints}
+   * @readonly
+   */
+  desiredCapConstraints;
 
   /** @type {string} */
   curContext;
 
-  appModel = new FakeApp();
+  /** @type {FakeApp} */
+  appModel;
 
-  constructor(opts = {}, shouldValidateCaps = true) {
+  /** @type {boolean} */
+  _proxyActive;
+
+  /** @type {boolean} */
+  shook;
+
+  /** @type {string?} */
+  focusedElId;
+
+  /** @type {Thing?} */
+  fakeThing;
+
+  /** @type {number} */
+  maxElId;
+
+  /** @type {Record<string,import('./fake-element').FakeElement>} */
+  elMap;
+
+  /** @type {string|null} */
+  _bidiProxyUrl;
+
+  /** @type {boolean} */
+  _clockRunning = false;
+
+  constructor(
+    opts = /** @type {import('@appium/types').InitialOpts} */ ({}),
+    shouldValidateCaps = true,
+  ) {
     super(opts, shouldValidateCaps);
     this.curContext = 'NATIVE_APP';
     this.elMap = {};
@@ -39,6 +74,9 @@ export class FakeDriver extends BaseDriver {
     this.fakeThing = null;
     this._proxyActive = false;
     this.shook = false;
+    this.appModel = new FakeApp();
+    this.desiredCapConstraints = FAKE_DRIVER_CONSTRAINTS;
+    this._bidiProxyUrl = null;
   }
 
   proxyActive() {
@@ -47,6 +85,10 @@ export class FakeDriver extends BaseDriver {
 
   canProxy() {
     return true;
+  }
+
+  get bidiProxyUrl() {
+    return this._bidiProxyUrl;
   }
 
   proxyReqRes(req, res) {
@@ -73,7 +115,7 @@ export class FakeDriver extends BaseDriver {
    * @param {W3CFakeDriverCaps} [w3cCapabilities3] W3C Capabilities
    * @param {import('@appium/types').DriverData[]} [driverData] Other session data
    * @override
-   * @returns {Promise<[string,FakeDriverCaps]>} Session ID and normalized capabilities
+   * @returns {Promise<[string,FakeDriverCaps]>}
    */
   async createSession(w3cCapabilities1, w3cCapabilities2, w3cCapabilities3, driverData = []) {
     // TODO add validation on caps.app that we will get for free from
@@ -85,7 +127,7 @@ export class FakeDriver extends BaseDriver {
       if (d.isUnique) {
         throw new errors.SessionNotCreatedError(
           'Cannot start session; another ' +
-            'unique session is in progress that requires all resources'
+            'unique session is in progress that requires all resources',
         );
       }
     }
@@ -95,7 +137,33 @@ export class FakeDriver extends BaseDriver {
     );
     this.caps = caps;
     await this.appModel.loadApp(caps.app);
+    if (this.caps.runClock) {
+      this.startClock();
+    }
     return [sessionId, caps];
+  }
+
+  /**
+   * @param {string} [sessionId]
+   * @returns {Promise<void>}
+   */
+  async deleteSession(sessionId) {
+    this.stopClock();
+    return await super.deleteSession(sessionId);
+  }
+
+  /**
+   * @returns {Promise<string>}
+   */
+  async getWindowHandle() {
+    return '1';
+  }
+
+  /**
+   * @returns {Promise<string[]>}
+   */
+  async getWindowHandles() {
+    return ['1'];
   }
 
   get driverData() {
@@ -109,10 +177,25 @@ export class FakeDriver extends BaseDriver {
     return this.fakeThing;
   }
 
+  async startClock() {
+    this._clockRunning = true;
+    while (this._clockRunning) {
+      await B.delay(500);
+      this.eventEmitter.emit('bidiEvent', {
+        method: 'appium:clock.currentTime',
+        params: {time: Date.now()},
+      });
+    }
+  }
+
+  stopClock() {
+    this._clockRunning = false;
+  }
+
   /**
    * Set the 'thing' value (so that it can be retrieved later)
    *
-   * @param {any} thing
+   * @param {Thing} thing
    * @returns {Promise<null>}
    */
   async setFakeThing(thing) {
@@ -138,7 +221,8 @@ export class FakeDriver extends BaseDriver {
    */
   async getDeprecatedCommandsCalled() {
     await B.delay(1);
-    return Array.from(deprecatedCommandsLogged);
+    // TODO: Properly get deprecatedCommandsLogged list from the base-driver
+    return [];
   }
 
   /**
@@ -149,6 +233,50 @@ export class FakeDriver extends BaseDriver {
   async callDeprecatedCommand() {
     await B.delay(1);
   }
+
+  /**
+   * @param {number} num1
+   * @param {number} num2
+   */
+  async doSomeMath(num1, num2) {
+    await B.delay(1);
+    return num1 + num2;
+  }
+
+  /**
+   * @param {number} num1
+   * @param {number} num2
+   */
+  async doSomeMath2(num1, num2) {
+    await B.delay(1);
+    return num1 + num2;
+  }
+
+  static newBidiCommands = /** @type {const} */({
+    'appium:fake': {
+      getFakeThing: {
+        command: 'getFakeThing',
+      },
+      setFakeThing: {
+        command: 'setFakeThing',
+        params: {
+          required: ['thing'],
+        },
+      },
+      doSomeMath: {
+        command: 'doSomeMath',
+        params: {
+          required: ['num1', 'num2'],
+        },
+      },
+      doSomeMath2: {
+        command: 'doSomeMath2',
+        params: {
+          required: ['num1', 'num2'],
+        },
+      },
+    }
+  });
 
   static newMethodMap = /** @type {const} */ ({
     '/session/:sessionId/fakedriver': {
@@ -195,92 +323,22 @@ export class FakeDriver extends BaseDriver {
   }
 
   static async updateServer(expressApp, httpServer, cliArgs) {
-    // eslint-disable-line require-await
+
     expressApp.all('/fakedriver', FakeDriver.fakeRoute);
     expressApp.all('/fakedriverCliArgs', (req, res) => {
       res.send(JSON.stringify(cliArgs));
     });
   }
-
-  /*********
-   * ALERT *
-   *********/
-  assertNoAlert = alert.assertNoAlert;
-  assertAlert = alert.assertAlert;
-  getAlertText = alert.getAlertText;
-  setAlertText = alert.setAlertText;
-  postAcceptAlert = alert.postAcceptAlert;
-  postDismissAlert = alert.postDismissAlert;
-
-  /************
-   * CONTEXTS *
-   ************/
-  getRawContexts = contexts.getRawContexts;
-  assertWebviewContext = contexts.assertWebviewContext;
-  getCurrentContext = contexts.getCurrentContext;
-  getContexts = contexts.getContexts;
-  setContext = contexts.setContext;
-  setFrame = contexts.setFrame;
-
-  /************
-   * ELEMENTS *
-   ************/
-  getElements = element.getElements;
-  getElement = element.getElement;
-  getName = element.getName;
-  elementDisplayed = element.elementDisplayed;
-  elementEnabled = element.elementEnabled;
-  elementSelected = element.elementSelected;
-  setValue = element.setValue;
-  getText = element.getText;
-  clear = element.clear;
-  click = element.click;
-  getAttribute = element.getAttribute;
-  getElementRect = element.getElementRect;
-  getSize = element.getSize;
-  equalsElement = element.equalsElement;
-  getCssProperty = element.getCssProperty;
-  getLocation = element.getLocation;
-  getLocationInView = element.getLocationInView;
-
-  /********
-   * FIND *
-   ********/
-  getExistingElementForNode = find.getExistingElementForNode;
-  wrapNewEl = find.wrapNewEl;
-  findElOrEls = find.findElOrEls;
-  findElement = find.findElement;
-  findElements = find.findElements;
-  findElementFromElement = find.findElementFromElement;
-  findElementsFromElement = find.findElementsFromElement;
-
-  /***********
-   * GENERAL *
-   ***********/
-  title = general.title;
-  keys = general.keys;
-  setGeoLocation = general.setGeoLocation;
-  getGeoLocation = general.getGeoLocation;
-  getPageSource = general.getPageSource;
-  getOrientation = general.getOrientation;
-  setOrientation = general.setOrientation;
-  getScreenshot = general.getScreenshot;
-  getWindowSize = general.getWindowSize;
-  getWindowRect = general.getWindowRect;
-  performActions = general.performActions;
-  getLog = general.getLog;
-  mobileShake = general.mobileShake;
-  doubleClick = general.doubleClick;
-  execute = general.execute;
-  fakeAddition = general.fakeAddition;
-  releaseActions = general.releaseActions;
 }
+
+import './commands';
 
 export default FakeDriver;
 
 /**
  * @typedef {import('./types').FakeDriverCaps} FakeDriverCaps
  * @typedef {import('./types').W3CFakeDriverCaps} W3CFakeDriverCaps
+ * @typedef {import('@appium/types').Element} Element
  */
 
 /**
@@ -291,4 +349,8 @@ export default FakeDriver;
 /**
  * @template {import('@appium/types').Constraints} C
  * @typedef {import('@appium/types').ExternalDriver<C>} ExternalDriver
+ */
+
+/**
+ * @typedef {import('@appium/types').Orientation} Orientation
  */

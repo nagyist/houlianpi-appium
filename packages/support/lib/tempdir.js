@@ -1,5 +1,5 @@
 /* This library is originated from temp.js at http://github.com/bruce/node-temp */
-import fs from './fs';
+import {fs} from './fs';
 import os from 'os';
 import nodePath from 'path';
 import cnst from 'constants';
@@ -31,7 +31,7 @@ async function tempDir() {
   );
   // creates a temp directory using the date and a random string
 
-  await fs.mkdir(filePath);
+  await fs.mkdir(filePath, {recursive: true});
 
   return filePath;
 }
@@ -77,7 +77,7 @@ async function open(affixes) {
     // opens the file in mode 384
     return {path: filePath, fd};
   } catch (err) {
-    return log.errorAndThrow(err);
+    throw log.errorWithException(err);
   }
 }
 
@@ -123,7 +123,7 @@ const openDir = tempDir;
  *
  * @returns {Promise<string>} A temp directory path whcih is defined as static in the same process
  */
-// eslint-disable-next-line require-await
+
 async function staticDir() {
   return _static;
 }

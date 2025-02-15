@@ -8,6 +8,13 @@ describe('#util', function () {
   let tmpFile;
   const content = 'YOLO';
 
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
+
   beforeEach(async function () {
     tmpRoot = await tempDir.openDir();
     tmpFile = path.resolve(tmpRoot, 'example.txt');
@@ -54,7 +61,7 @@ describe('#util', function () {
     afterEach(async function () {
       try {
         await B.all([lockFile, testFile].map((p) => fs.unlink(p)));
-      } catch (ign) {}
+      } catch {}
     });
 
     it('should lock a file during the given behavior', async function () {

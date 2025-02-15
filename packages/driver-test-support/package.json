@@ -1,6 +1,6 @@
 {
   "name": "@appium/driver-test-support",
-  "version": "0.3.7",
+  "version": "0.7.4",
   "description": "Test utilities for Appium drivers",
   "keywords": [
     "automation",
@@ -41,16 +41,16 @@
   },
   "types": "./build/lib/index.d.ts",
   "dependencies": {
-    "@appium/types": "^0.9.1",
-    "@types/lodash": "4.14.191",
-    "axios": "1.2.3",
+    "@appium/types": "^0.24.0",
+    "axios": "1.7.9",
     "bluebird": "3.7.2",
-    "chai": "4.3.7",
+    "chai": "5.1.2",
+    "chai-as-promised": "8.0.1",
     "get-port": "5.1.1",
     "lodash": "4.17.21",
-    "sinon": "15.0.1",
+    "sinon": "19.0.2",
     "source-map-support": "0.5.21",
-    "type-fest": "3.5.7"
+    "type-fest": "4.34.1"
   },
   "peerDependencies": {
     "appium": "^2.0.0-beta.43",
@@ -63,5 +63,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "gitHead": "84b211330dc84849af9cc1f3a5c5ad32e15b2e72"
+  "gitHead": "8480a85ce2fa466360e0fb1a7f66628331907f02"
 }

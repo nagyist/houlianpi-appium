@@ -1,15 +1,32 @@
 import {server} from '../../../lib';
 import axios from 'axios';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import B from 'bluebird';
 import _ from 'lodash';
+import { exec } from 'teen_process';
+import https from 'node:https';
 import {TEST_HOST, getTestPort} from '@appium/driver-test-support';
+
+async function generateCertificate (certPath, keyPath) {
+  await exec('openssl', [
+    'req', '-nodes', '-new', '-x509',
+    '-keyout', keyPath,
+    '-out', certPath,
+    '-subj', '/C=US/ST=State/L=City/O=company/OU=Com/CN=www.testserver.local',
+  ]);
+}
 
 describe('server', function () {
   let hwServer;
   let port;
   let sandbox;
   before(async function () {
+    const chai = await import('chai');
+    const chaisAsPromised = await import('chai-as-promised');
+    chai.use(chaisAsPromised.default);
+    chai.should();
+
     port = await getTestPort(true);
 
     function configureRoutes(app) {
@@ -69,7 +86,11 @@ describe('server', function () {
     }).should.be.rejectedWith(/EADDRINUSE/);
   });
   it('should not wait for the server close connections before finishing closing', async function () {
-    let bodyPromise = axios.get(`http://${TEST_HOST}:${port}/pause`).catch(() => {});
+    const bodyPromise = (async () => {
+      try {
+        return await axios.get(`http://${TEST_HOST}:${port}/pause`);
+      } catch {}
+    })();
 
     // relinquish control so that we don't close before the request is received
     await B.delay(100);
@@ -96,22 +117,87 @@ describe('server', function () {
   });
 });
 
+describe('tls server', function () {
+  let hwServer;
+  let port;
+  let certPath = 'certificate.cert';
+  let keyPath = 'certificate.key';
+  const looseClient = axios.create({
+    httpsAgent: new https.Agent({
+      rejectUnauthorized: false
+    })
+  });
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaisAsPromised = await import('chai-as-promised');
+    chai.use(chaisAsPromised.default);
+    chai.should();
+
+    try {
+      await generateCertificate(certPath, keyPath);
+    } catch (e) {
+      if (process.env.CI) {
+        throw e;
+      }
+      return this.skip();
+    }
+
+    port = await getTestPort(true);
+
+    function configureRoutes(app) {
+      app.get('/', (req, res) => {
+        res.header['content-type'] = 'text/html';
+        res.status(200).send('Hello World!');
+      });
+    }
+
+    hwServer = await server({
+      routeConfiguringFunction: configureRoutes,
+      cliArgs: {
+        sslCertificatePath: certPath,
+        sslKeyPath: keyPath,
+      },
+      port,
+    });
+  });
+  after(async function () {
+    await hwServer.close();
+  });
+
+  it('should start up with our middleware', async function () {
+    const {data} = await looseClient.get(`https://${TEST_HOST}:${port}/`);
+    data.should.eql('Hello World!');
+  });
+  it('should throw if untrusted', async function () {
+    await axios.get(`https://${TEST_HOST}:${port}/`).should.eventually.be.rejected;
+  });
+  it('should throw if not secure', async function () {
+    await axios.get(`http://${TEST_HOST}:${port}/`).should.eventually.be.rejected;
+  });
+});
+
 describe('server plugins', function () {
   let hwServer;
   let port;
 
   before(async function () {
+    const chai = await import('chai');
+    const chaisAsPromised = await import('chai-as-promised');
+    chai.use(chaisAsPromised.default);
+    chai.should();
+
     port = await getTestPort(true);
   });
 
   afterEach(async function () {
     try {
       await hwServer.close();
-    } catch (ign) {}
+    } catch {}
   });
 
   function updaterWithGetRoute(route, reply) {
-    // eslint-disable-next-line require-await
+
     return async (app, httpServer) => {
       app.get(`/${route}`, (req, res) => {
         res.header['content-type'] = 'text/html';

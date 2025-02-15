@@ -3,6 +3,249 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [5.7.0](https://github.com/appium/appium/compare/@appium/fake-driver@5.6.0...@appium/fake-driver@5.7.0) (2025-01-08)
+
+
+### Features
+
+* **appium,base-driver,base-plugin:** allow plugins to define custom bidi commands and emit bidi events ([#20876](https://github.com/appium/appium/issues/20876)) ([8df1c21](https://github.com/appium/appium/commit/8df1c217a15d30300c04b9f59cdbdffa70325828))
+
+
+
+## [5.6.0](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.7...@appium/fake-driver@5.6.0) (2025-01-02)
+
+
+### Features
+
+* **appium:** allow drivers to define their own bidi commands ([#20828](https://github.com/appium/appium/issues/20828)) ([a917ec6](https://github.com/appium/appium/commit/a917ec6ceda2166fb3dcbff6b2768f700db9e103))
+* **fake-driver:** add getWindowHandle and getWindowHandles to reduce wdio errors in CI ([#20865](https://github.com/appium/appium/issues/20865)) ([c5443e9](https://github.com/appium/appium/commit/c5443e9fc9ac6e71bf2ddda6f66d5eccd24b20de))
+
+
+### Bug Fixes
+
+* Reduce linter warnings ([#20860](https://github.com/appium/appium/issues/20860)) ([65658cc](https://github.com/appium/appium/commit/65658ccbdde9144c45cb5aad6a9089a5d6f3a0a3))
+
+
+
+## [5.5.7](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.6...@appium/fake-driver@5.5.7) (2024-12-05)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.9.6 ([#20819](https://github.com/appium/appium/issues/20819)) ([228b091](https://github.com/appium/appium/commit/228b091edc6f16dfc081642bfc313b66d07bd370))
+
+
+
+## [5.5.6](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.5...@appium/fake-driver@5.5.6) (2024-11-29)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.9.5 ([#20699](https://github.com/appium/appium/issues/20699)) ([7860c05](https://github.com/appium/appium/commit/7860c05285392732308e5bb6a6426b4b0fc45bc7))
+
+
+
+## [5.5.5](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.4...@appium/fake-driver@5.5.5) (2024-10-15)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.9.4 ([#20663](https://github.com/appium/appium/issues/20663)) ([b56b180](https://github.com/appium/appium/commit/b56b180f3465d14e36b2bb8e7fa831954e0fc4c6))
+
+
+
+## [5.5.4](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.3...@appium/fake-driver@5.5.4) (2024-09-26)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.9.3 ([#20599](https://github.com/appium/appium/issues/20599)) ([f344504](https://github.com/appium/appium/commit/f344504f15a08eb1f92f2d742f32d3f48f494e02))
+
+
+
+## [5.5.3](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.2...@appium/fake-driver@5.5.3) (2024-09-16)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.9.0 ([#20513](https://github.com/appium/appium/issues/20513)) ([da3f9ff](https://github.com/appium/appium/commit/da3f9ff8812be0c25841734293bd852d3a181c36))
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.9.2 ([#20537](https://github.com/appium/appium/issues/20537)) ([3d674d0](https://github.com/appium/appium/commit/3d674d0085d22959fcf62a195af42ab2f9ba6d3a))
+
+
+
+## [5.5.2](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.1...@appium/fake-driver@5.5.2) (2024-05-27)
+
+**Note:** Version bump only for package @appium/fake-driver
+
+
+
+
+
+## [5.5.1](https://github.com/appium/appium/compare/@appium/fake-driver@5.5.0...@appium/fake-driver@5.5.1) (2024-02-13)
+
+
+### Bug Fixes
+
+* **fake-driver:** fix dependencies ([#19782](https://github.com/appium/appium/issues/19782)) ([889a533](https://github.com/appium/appium/commit/889a533eef8b7a0805dd786d358f5729e03f0c40))
+
+
+
+## [5.5.0](https://github.com/appium/appium/compare/@appium/fake-driver@5.4.0...@appium/fake-driver@5.5.0) (2024-02-06)
+
+
+### Features
+
+* **appium:** Set a proper exit code if any of required doctor checks fails ([#19617](https://github.com/appium/appium/issues/19617)) ([f4011f1](https://github.com/appium/appium/commit/f4011f17d4d03bc854c43462848a4c38427acb85))
+
+
+
+## [5.4.0](https://github.com/appium/appium/compare/@appium/fake-driver@5.3.0...@appium/fake-driver@5.4.0) (2024-01-03)
+
+
+### Features
+
+* add webdriver bidi support ([2b21e66](https://github.com/appium/appium/commit/2b21e66891e8ab8c3929f04f32e94eb4efdba691))
+* **appium,support:** Add common shortcuts for doctor checks ([#19562](https://github.com/appium/appium/issues/19562)) ([893b9e1](https://github.com/appium/appium/commit/893b9e15d64d2356ea339596e805543df51fa505))
+* **appium:** Make doctor extensible ([#19542](https://github.com/appium/appium/issues/19542)) ([a30286b](https://github.com/appium/appium/commit/a30286b6e7b9753f73e55a8f9db14211b3124578))
+
+
+
+## [5.3.0](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.11...@appium/fake-driver@5.3.0) (2023-12-18)
+
+
+### Features
+
+* **appium:** Load drivers and plugins asynchronously ([#19512](https://github.com/appium/appium/issues/19512)) ([06e7f34](https://github.com/appium/appium/commit/06e7f3489dff820fa16b16e47417acd0c10e0b05))
+
+
+### Bug Fixes
+
+* **docutils:** remove `@appium/typedoc-plugin-appium` and all other uses of `typedoc` ([#19465](https://github.com/appium/appium/issues/19465)) ([7528fcf](https://github.com/appium/appium/commit/7528fcf890f79f4017f5e718bb1952bf907ee479))
+* **universal-xml-plugin:** update dependency xpath to v0.0.34 ([#19540](https://github.com/appium/appium/issues/19540)) ([cdd8a65](https://github.com/appium/appium/commit/cdd8a65887d1718af0d520bc7ad25add6e6466fb))
+
+
+
+## [5.2.11](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.10...@appium/fake-driver@5.2.11) (2023-11-14)
+
+
+### Bug Fixes
+
+* **support:** update definitelytyped ([5ae8df3](https://github.com/appium/appium/commit/5ae8df3c36c7f03fbf3420087b532086f6742348))
+
+
+
+## [5.2.10](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.9...@appium/fake-driver@5.2.10) (2023-10-19)
+
+
+### Bug Fixes
+
+* **support:** update definitelytyped ([a306ce7](https://github.com/appium/appium/commit/a306ce741a806d21bc44f3b979803b8af5da99aa))
+
+
+
+## [5.2.9](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.8...@appium/fake-driver@5.2.9) (2023-10-18)
+
+
+### Bug Fixes
+
+* **images-plugin:** update dependency lru-cache to v10 ([#19050](https://github.com/appium/appium/issues/19050)) ([72a806b](https://github.com/appium/appium/commit/72a806bec7c3a80747192d24dfd9d8286a751810))
+* **opencv:** update definitelytyped ([d2a9a99](https://github.com/appium/appium/commit/d2a9a99418af9ce9b569bb9b98ee396faab932bb))
+* **support:** update definitelytyped ([b6a76ce](https://github.com/appium/appium/commit/b6a76ce91e2765c22f84e389b93f780e0b4490c0))
+
+
+
+## [5.2.8](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.7...@appium/fake-driver@5.2.8) (2023-08-21)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency xpath to v0.0.33 ([#18952](https://github.com/appium/appium/issues/18952)) ([f2cff24](https://github.com/appium/appium/commit/f2cff24685e96578f17549454de7b7931c13df83))
+
+
+
+## [5.2.7](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.6...@appium/fake-driver@5.2.7) (2023-08-17)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.8.10 ([#18949](https://github.com/appium/appium/issues/18949)) ([12147d5](https://github.com/appium/appium/commit/12147d518fc3ac86b01c3401b9e462b5dca99ca4))
+
+
+
+## [5.2.6](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.5...@appium/fake-driver@5.2.6) (2023-07-03)
+
+
+### Bug Fixes
+
+* **types:** separate the type of opts from initialOpts ([d6cca51](https://github.com/appium/appium/commit/d6cca5175c3e55d4670936c9d216cd3a6610d16b))
+
+
+
+## [5.2.5](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.4...@appium/fake-driver@5.2.5) (2023-06-15)
+
+
+### Bug Fixes
+
+* **fake-driver:** update definition of findElOrEls ([598b255](https://github.com/appium/appium/commit/598b255e8d4a2b41cca0ec0c02a54c46946eadb5))
+* **types,fake-driver:** getLog doesn't necessarily return an array ([00ae162](https://github.com/appium/appium/commit/00ae1625d73305b8840d45a0dc98ac3cc628ac37))
+* **types:** various fixes for reality ([81bc527](https://github.com/appium/appium/commit/81bc527be6aa54dd30a012156b5752b8b821ac0c))
+
+
+
+## [5.2.4](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.3...@appium/fake-driver@5.2.4) (2023-06-14)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.8.8 ([3bf4060](https://github.com/appium/appium/commit/3bf406015eb9854abbf6cf024e3bd724468c924d))
+
+
+
+## [5.2.3](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.2...@appium/fake-driver@5.2.3) (2023-04-03)
+
+
+### Bug Fixes
+
+* **universal-xml-plugin:** update dependency @xmldom/xmldom to v0.8.7 ([b9d339e](https://github.com/appium/appium/commit/b9d339eaf3527a0642f4fd904f447c80e2c2165b))
+
+
+
+
+
+## [5.2.2](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.1...@appium/fake-driver@5.2.2) (2023-03-28)
+
+
+### Bug Fixes
+
+* **appium,types,base-driver,fake-driver,driver-test-support:** normalize constraint defaults ([3c9fa7b](https://github.com/appium/appium/commit/3c9fa7ba73b639e610e1f3d41d239a9402845b4c))
+
+
+
+
+
+## [5.2.1](https://github.com/appium/appium/compare/@appium/fake-driver@5.2.0...@appium/fake-driver@5.2.1) (2023-03-08)
+
+
+### Bug Fixes
+
+* **appium,fake-driver:** expose child process when running an extension script ([e9dae3f](https://github.com/appium/appium/commit/e9dae3f6d006dcf89b6c0b6fb491be15acfed98b))
+* **fake-driver:** fix a broken type ([b4c1403](https://github.com/appium/appium/commit/b4c1403c22c4ffd7a4358f2473917c33f8c0049e))
+
+
+
+
+
+# [5.2.0](https://github.com/appium/appium/compare/@appium/fake-driver@5.1.5...@appium/fake-driver@5.2.0) (2023-02-24)
+
+
+### Features
+
+* **typedoc-plugin-appium:** extract descriptions of return values from builtins ([ebe9477](https://github.com/appium/appium/commit/ebe9477a3c56afd60c30c4591436c4ec68119f2a))
+
+
+
+
+
 ## [5.1.5](https://github.com/appium/appium/compare/@appium/fake-driver@5.1.4...@appium/fake-driver@5.1.5) (2023-02-09)
 
 **Note:** Version bump only for package @appium/fake-driver

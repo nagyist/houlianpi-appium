@@ -1,5 +1,6 @@
-import {system} from '../../lib/index.js';
+import {system} from '../../lib';
 import os from 'os';
+// eslint-disable-next-line import/named
 import {createSandbox} from 'sinon';
 import * as teen_process from 'teen_process';
 import _ from 'lodash';
@@ -12,6 +13,13 @@ let libs = {teen_process, os, system};
 
 describe('system', function () {
   let sandbox;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    chai.should();
+  });
 
   beforeEach(function () {
     sandbox = createSandbox();
