@@ -1,10 +1,9 @@
 import B from 'bluebird';
-import _ from 'lodash';
 import {randomUUID} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import stream from 'node:stream';
-import {promisify} from 'node:util';
+import {isDeepStrictEqual, promisify} from 'node:util';
 import {asyncmap} from 'asyncbox';
 import {fs} from './fs';
 import * as semver from 'semver';
@@ -66,7 +65,7 @@ export function uuidV5(...args: Parameters<typeof uuidV5Lib>): ReturnType<typeof
  * @returns `true` if `val` is a string with at least one character
  */
 export function hasContent(val: unknown): val is NonEmptyString {
-  return _.isString(val) && val !== '';
+  return typeof val === 'string' && val !== '';
 }
 
 /**
@@ -76,21 +75,34 @@ export function hasContent(val: unknown): val is NonEmptyString {
  * @returns `true` if `val` is non-null and non-undefined (and not NaN for numbers)
  */
 export function hasValue<T>(val: T): val is NonNullable<T> {
-  if (_.isNumber(val)) {
-    return !_.isNaN(val);
+  if (typeof val === 'number') {
+    return !Number.isNaN(val);
   }
-  return !_.isUndefined(val) && !_.isNull(val);
+  return val !== undefined && val !== null;
 }
 
 /**
  * Creates a memoized version of a function.
  *
  * @param fn - Function to memoize
- * @param resolver - Optional cache key resolver
- * @returns Memoized function
+ * @param resolver - Optional cache key resolver. If omitted, the first argument is used as the cache key.
+ * @returns Memoized function with a mutable `.cache` map (compatible with lodash-style cache resets in tests).
  */
-export function memoize<Fn extends (...args: any[]) => any>(fn: Fn): Fn {
-  return _.memoize(fn) as unknown as Fn;
+export function memoize<Fn extends (...args: any[]) => any>(
+  fn: Fn,
+  resolver?: (...args: Parameters<Fn>) => unknown
+): Fn & {cache: Map<unknown, ReturnType<Fn>>} {
+  const memoizedFn = (function (this: unknown, ...args: Parameters<Fn>) {
+    const key = resolver ? resolver.apply(this, args) : args[0];
+    if (memoizedFn.cache.has(key)) {
+      return memoizedFn.cache.get(key) as ReturnType<Fn>;
+    }
+    const result = fn.apply(this, args);
+    memoizedFn.cache.set(key, result);
+    return result;
+  }) as unknown as Fn & {cache: Map<unknown, ReturnType<Fn>>};
+  memoizedFn.cache = new Map<unknown, ReturnType<Fn>>();
+  return memoizedFn;
 }
 
 /**
@@ -100,7 +112,11 @@ export function memoize<Fn extends (...args: any[]) => any>(fn: Fn): Fn {
  * @returns `true` if the value is a plain object
  */
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return _.isPlainObject(value);
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || prototype === Object.prototype;
 }
 
 /**
@@ -110,7 +126,19 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
  * @returns `true` if the value is empty
  */
 export function isEmpty(value: unknown): boolean {
-  return _.isEmpty(value);
+  if (value == null) {
+    return true;
+  }
+  if (typeof value === 'string' || Array.isArray(value) || Buffer.isBuffer(value)) {
+    return value.length === 0;
+  }
+  if (value instanceof Map || value instanceof Set) {
+    return value.size === 0;
+  }
+  if (typeof value === 'object' || typeof value === 'function') {
+    return Object.keys(value).length === 0;
+  }
+  return true;
 }
 
 /**
@@ -121,7 +149,7 @@ export function isEmpty(value: unknown): boolean {
  * @returns `true` when values are deeply equal
  */
 export function isEqual(left: unknown, right: unknown): boolean {
-  return _.isEqual(left, right);
+  return isDeepStrictEqual(left, right);
 }
 
 /**
@@ -131,7 +159,7 @@ export function isEqual(left: unknown, right: unknown): boolean {
  * @returns Escaped string safe for RegExp source
  */
 export function escapeRegExp(value: string): string {
-  return _.escapeRegExp(value);
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -141,7 +169,7 @@ export function escapeRegExp(value: string): string {
  * @returns New array with unique values preserving input order
  */
 export function uniq<T>(values: readonly T[]): T[] {
-  return _.uniq(values);
+  return [...new Set(values)];
 }
 
 /**
@@ -152,13 +180,19 @@ export function uniq<T>(values: readonly T[]): T[] {
  * @returns Truncated string
  */
 export function truncateString(value: string, options: TruncateStringOptions | number = {}): string {
-  const normalizedOptions = _.isNumber(options) ? {length: options} : options;
+  const normalizedOptions = typeof options === 'number' ? {length: options} : options;
   const {length, omission = '…'} = normalizedOptions;
-  const truncateOpts: TruncateStringOptions = {omission};
-  if (!_.isUndefined(length)) {
-    truncateOpts.length = length;
+  const stringValue =
+    value == null ? '' : typeof value === 'number' && Object.is(value, -0) ? '-0' : String(value);
+  const maxLength = length ?? 30;
+  if (maxLength <= 0) {
+    return omission;
   }
-  return _.truncate(value as string, truncateOpts);
+  if (stringValue.length <= maxLength) {
+    return stringValue;
+  }
+  const contentLength = maxLength - omission.length;
+  return contentLength > 0 ? `${stringValue.slice(0, contentLength)}${omission}` : omission;
 }
 
 /**
@@ -287,7 +321,7 @@ export function jsonStringify(
   replacer: ((key: string, value: unknown) => unknown) | null = null,
   space: number | string = 2
 ): string {
-  const replacerFunc = _.isFunction(replacer) ? replacer : (_k: string, v: unknown) => v;
+  const replacerFunc = typeof replacer === 'function' ? replacer : (_k: string, v: unknown) => v;
 
   const bufferToJSON = Buffer.prototype.toJSON;
   delete (Buffer.prototype as Record<string, unknown>).toJSON;
@@ -314,7 +348,7 @@ export function jsonStringify(
 export function unwrapElement(el: Element | string): string {
   const elObj = el as unknown as Record<string, string>;
   for (const propName of [W3C_WEB_ELEMENT_IDENTIFIER, 'ELEMENT']) {
-    if (_.has(elObj, propName)) {
+    if (Object.hasOwn(elObj, propName)) {
       return elObj[propName];
     }
   }
@@ -348,11 +382,11 @@ export function filterObject<T extends Record<string, unknown>>(
   obj: T,
   predicate?: ((value: unknown, obj: T) => boolean) | unknown
 ): Partial<T> {
-  const newObj = _.clone(obj) as Record<string, unknown>;
+  const newObj = {...obj} as Record<string, unknown>;
   let pred: (v: unknown, o: T) => boolean;
-  if (_.isUndefined(predicate)) {
-    pred = (v) => !_.isUndefined(v);
-  } else if (!_.isFunction(predicate)) {
+  if (predicate === undefined) {
+    pred = (v) => v !== undefined;
+  } else if (typeof predicate !== 'function') {
     const valuePredicate = predicate;
     pred = (v) => v === valuePredicate;
   } else {
@@ -533,7 +567,7 @@ export function compareVersions(
  * @returns Quoted string suitable for shell parsing
  */
 export function quote(args: string | string[]): string {
-  return shellQuote(_.castArray(args));
+  return shellQuote(Array.isArray(args) ? args : [args]);
 }
 
 /**
@@ -550,9 +584,9 @@ export function pluralize(
   options: PluralizeOptions | boolean = {}
 ): string {
   let inclusive = false;
-  if (_.isBoolean(options)) {
+  if (typeof options === 'boolean') {
     inclusive = options;
-  } else if (_.isBoolean(options?.inclusive)) {
+  } else if (typeof options?.inclusive === 'boolean') {
     inclusive = options.inclusive;
   }
   return pluralizeLib(word, count, inclusive);
@@ -655,7 +689,7 @@ export function getLockFileGuard<T>(
           acquired = true;
         } catch (e) {
           const err = e as Error;
-          if (_.includes(err.message, 'EEXIST') && tryRecovery && !triedRecovery) {
+          if (err.message?.includes('EEXIST') && tryRecovery && !triedRecovery) {
             _lockfile.unlockSync(lockFile);
             triedRecovery = true;
           } else {
