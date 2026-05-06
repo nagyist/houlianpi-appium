@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [3.2.1](https://github.com/appium/appium/compare/@appium/eslint-config-appium-ts@3.2.0...@appium/eslint-config-appium-ts@3.2.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* **eslint-config-appium-ts:** set new ESLint 10 rules to 'warn' ([#22251](https://github.com/appium/appium/issues/22251)) ([98a1735](https://github.com/appium/appium/commit/98a1735913bcc02be7574156e0f13e1d05fcb87f))
+
+
+
 ## [3.2.0](https://github.com/appium/appium/compare/@appium/eslint-config-appium-ts@3.1.0...@appium/eslint-config-appium-ts@3.2.0) (2026-05-06)
 
 

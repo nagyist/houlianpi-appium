@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [7.2.1](https://github.com/appium/appium/compare/@appium/support@7.2.0...@appium/support@7.2.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* **support:** Avoid exceptions in unwrapElement ([#22250](https://github.com/appium/appium/issues/22250)) ([3229e74](https://github.com/appium/appium/commit/3229e74d3d9c1c5bc32d63751901c299133539a8))
+
+
+
 ## [7.2.0](https://github.com/appium/appium/compare/@appium/support@7.1.1...@appium/support@7.2.0) (2026-05-06)
 
 
