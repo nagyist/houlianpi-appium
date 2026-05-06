@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [10.5.0](https://github.com/appium/appium/compare/@appium/base-driver@10.4.0...@appium/base-driver@10.5.0) (2026-05-06)
+
+
+### Features
+
+* add 3 WebDriver extension endpoints ([#22237](https://github.com/appium/appium/issues/22237)) ([787571d](https://github.com/appium/appium/commit/787571d33836c06bb1332d7bc6cc2f9800bbdd82))
+* **base-driver:** map W3C 'no such shadow root' to NoSuchShadowRootError ([#22210](https://github.com/appium/appium/issues/22210)) ([fa1e875](https://github.com/appium/appium/commit/fa1e87535be36647983b70362f00533ef7843b40)), closes [#22209](https://github.com/appium/appium/issues/22209)
+
+
+
 ## [10.4.0](https://github.com/appium/appium/compare/@appium/base-driver@10.3.0...@appium/base-driver@10.4.0) (2026-04-23)
 
 

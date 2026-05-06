@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [2.4.0](https://github.com/appium/appium/compare/@appium/docutils@2.3.1...@appium/docutils@2.4.0) (2026-05-06)
+
+
+### Features
+
+* **docutils:** add mermaid diagram support ([#22227](https://github.com/appium/appium/issues/22227)) ([08493df](https://github.com/appium/appium/commit/08493df3d12c78c1234c1efdc993c58e42d0abdb))
+
+
+
 ## [2.3.1](https://github.com/appium/appium/compare/@appium/docutils@2.3.0...@appium/docutils@2.3.1) (2026-04-23)
 
 

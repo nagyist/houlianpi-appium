@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [3.2.0](https://github.com/appium/appium/compare/@appium/eslint-config-appium-ts@3.1.0...@appium/eslint-config-appium-ts@3.2.0) (2026-05-06)
+
+
+### Features
+
+* **eslint-config-appium-ts:** Add rule to warn if a type is not imported properly ([#22226](https://github.com/appium/appium/issues/22226)) ([bde5bd5](https://github.com/appium/appium/commit/bde5bd57f4b64bacf6750338e9c9e88ae3cebea1))
+* **eslint-config-appium-ts:** support ESLint 10 ([#22236](https://github.com/appium/appium/issues/22236)) ([4849ad0](https://github.com/appium/appium/commit/4849ad015d331a91dc7c013dda151ee432870293))
+
+
+
 ## [3.1.0](https://github.com/appium/appium/compare/@appium/eslint-config-appium-ts@3.0.2...@appium/eslint-config-appium-ts@3.1.0) (2026-04-23)
 
 

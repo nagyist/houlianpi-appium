@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [7.2.0](https://github.com/appium/appium/compare/@appium/support@7.1.1...@appium/support@7.2.0) (2026-05-06)
+
+
+### Features
+
+* **support:** Add various helper utils ([#22213](https://github.com/appium/appium/issues/22213)) ([2c0fb7a](https://github.com/appium/appium/commit/2c0fb7a2e4a8652e51ce010e8832153c49801a9d))
+* **support:** Replace lodash with native alternatives ([#22225](https://github.com/appium/appium/issues/22225)) ([63218cd](https://github.com/appium/appium/commit/63218cdac639c3a15584e5f815f15a8c9f2db049))
+
+
+
 ## [7.1.1](https://github.com/appium/appium/compare/@appium/support@7.1.0...@appium/support@7.1.1) (2026-04-23)
 
 
