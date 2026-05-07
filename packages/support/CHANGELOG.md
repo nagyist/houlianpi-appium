@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [7.2.2](https://github.com/appium/appium/compare/@appium/support@7.2.1...@appium/support@7.2.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **support:** accept Uint8Array/ArrayBuffer in plist parse path ([#22256](https://github.com/appium/appium/issues/22256)) ([8c6c199](https://github.com/appium/appium/commit/8c6c19982e97eded690da51e745c69e4ccc1e6bd))
+
+
+
 ## [7.2.1](https://github.com/appium/appium/compare/@appium/support@7.2.0...@appium/support@7.2.1) (2026-05-06)
 
 
